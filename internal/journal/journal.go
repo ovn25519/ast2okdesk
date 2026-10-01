@@ -57,6 +57,9 @@ type Config struct {
 	RetryInitialBackoff time.Duration
 	// FinalizeTimeout — предел на обработку одного звонка.
 	FinalizeTimeout time.Duration
+	// AutoLinkIssue — подбирать заявку для автопривязки. Если выключено,
+	// issue_id не отправляется, а привязку выполняет координатор вручную.
+	AutoLinkIssue bool
 }
 
 // Finalizer — конечный автомат завершения звонка по Uniqueid.
@@ -94,7 +97,7 @@ func New(st Store, client CallClient, rec Recordings, cfg Config, logger *slog.L
 	if cfg.FinalizeTimeout <= 0 {
 		cfg.FinalizeTimeout = defaultFinalizeTimeout
 	}
-	return &Finalizer{
+	f := &Finalizer{
 		store:   st,
 		client:  client,
 		rec:     rec,
@@ -103,6 +106,12 @@ func New(st Store, client CallClient, rec Recordings, cfg Config, logger *slog.L
 		now:     time.Now,
 		pending: make(map[string]*pending),
 	}
+	if cfg.AutoLinkIssue {
+		f.log.Info("автопривязка заявок включена")
+	} else {
+		f.log.Info("автопривязка заявок выключена: привязку к заявке выполняет координатор вручную")
+	}
+	return f
 }
 
 // CDRCount возвращает число принятых событий Cdr (для мониторинга).
@@ -219,7 +228,10 @@ func (j *Finalizer) finalize(ctx context.Context, uniqueid string, cdr ami.Frame
 		fileURL = j.rec.URLFor(uniqueid, call.CallerIDNum, fileStart)
 	}
 
-	issueID := j.findIssue(ctx, call.CallerIDNum)
+	var issueID *int
+	if j.cfg.AutoLinkIssue {
+		issueID = j.findIssue(ctx, call.CallerIDNum)
+	}
 
 	payload, err := j.client.BuildPhoneCall(okdesk.PhoneCall{
 		CallID:        uniqueid,

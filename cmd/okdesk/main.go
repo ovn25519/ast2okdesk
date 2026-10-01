@@ -118,6 +118,7 @@ func run() int {
 	finalizer := journal.New(st, okClient, loc, journal.Config{
 		IncomingPhoneNumber: cfg.Okdesk.IncomingPhoneNumber,
 		RetryInitialBackoff: time.Duration(cfg.Retry.InitialBackoffSeconds) * time.Second,
+		AutoLinkIssue:       cfg.Okdesk.AutoLinkIssue,
 	}, logger)
 	dispatcher.SetFinalizer(finalizer)
 

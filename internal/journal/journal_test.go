@@ -154,6 +154,9 @@ func (c *fakeClient) sendCount() int {
 // --- Вспомогательные -----------------------------------------------------------
 
 func newFinalizer(st Store, cl CallClient, cfg Config) *Finalizer {
+	// В большинстве тестов проверяется включённая автопривязка; отключение
+	// проверяется отдельным тестом через New с AutoLinkIssue=false.
+	cfg.AutoLinkIssue = true
 	return New(st, cl, recording.New("https://rec/", time.UTC), cfg, silent())
 }
 
@@ -357,6 +360,48 @@ func TestIssueLookupErrorIgnored(t *testing.T) {
 	}
 	if pc.IssueID != nil {
 		t.Errorf("issue_id = %v, ожидался nil", pc.IssueID)
+	}
+	if cl.sendCount() != 1 {
+		t.Errorf("отправок = %d, ожидалась 1", cl.sendCount())
+	}
+}
+
+// TestAutoLinkDisabled проверяет, что при AutoLinkIssue=false поиск заявки не
+// выполняется вовсе, а запись уходит в Okdesk без issue_id.
+func TestAutoLinkDisabled(t *testing.T) {
+	st := newFakeStore()
+	st.put(baseCall)
+	cl := &fakeClient{issueID: 42, issueOK: true}
+	fin := New(st, cl, recording.New("https://rec/", time.UTC), Config{
+		IncomingPhoneNumber: "+78005553535",
+		CdrTimeout:          time.Second,
+		RetryInitialBackoff: time.Second,
+		AutoLinkIssue:       false,
+	}, silent())
+
+	if err := fin.OnHangup(context.Background(), hangupFrame("u1")); err != nil {
+		t.Fatalf("OnHangup: %v", err)
+	}
+	fin.OnCdr(context.Background(), ami.NewFrame(map[string]string{
+		"Event": "Cdr", "UniqueID": "u1",
+		"StartTime": "2026-09-30 09:15:00", "AnswerTime": "2026-09-30 09:16:00",
+		"EndTime": "2026-09-30 09:17:00", "BillableSeconds": "60",
+	}))
+	fin.Wait()
+
+	cl.mu.Lock()
+	findCalls := len(cl.findPhones)
+	cl.mu.Unlock()
+	if findCalls != 0 {
+		t.Errorf("FindIssueID вызван %d раз, ожидалось 0", findCalls)
+	}
+
+	pc, ok := cl.lastBuilt()
+	if !ok {
+		t.Fatal("phone_call не собран")
+	}
+	if pc.IssueID != nil {
+		t.Errorf("issue_id = %v, ожидался nil при отключённой автопривязке", *pc.IssueID)
 	}
 	if cl.sendCount() != 1 {
 		t.Errorf("отправок = %d, ожидалась 1", cl.sendCount())

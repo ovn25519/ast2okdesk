@@ -24,6 +24,7 @@ api_token = "okdesk-secret"
 telephony_number = 327
 incoming_phone_number = "+73430000000"
 search_numbers_count = 10
+auto_link_issue = true
 timezone = "Europe/Moscow"
 
 [recordings]
@@ -105,6 +106,9 @@ func TestLoadFull(t *testing.T) {
 	if cfg.Okdesk.Timezone != "Europe/Moscow" {
 		t.Errorf("okdesk.timezone = %q", cfg.Okdesk.Timezone)
 	}
+	if !cfg.Okdesk.AutoLinkIssue {
+		t.Error("okdesk.auto_link_issue = false, ожидалось true из полного конфига")
+	}
 	// base_url нормализуется: окдесковый без «/», записи — всегда с «/».
 	if cfg.Okdesk.BaseURL != "https://intellektstroy.okdesk.ru" {
 		t.Errorf("okdesk.base_url = %q", cfg.Okdesk.BaseURL)
@@ -131,6 +135,7 @@ func TestLoadAppliesDefaults(t *testing.T) {
 		{"asterisk.ami_host", cfg.Asterisk.AMIHost, "localhost"},
 		{"asterisk.ami_port", cfg.Asterisk.AMIPort, 5038},
 		{"okdesk.search_numbers_count", cfg.Okdesk.SearchNumbersCount, 10},
+		{"okdesk.auto_link_issue", cfg.Okdesk.AutoLinkIssue, false},
 		{"okdesk.timezone", cfg.Okdesk.Timezone, "Europe/Moscow"},
 		{"recordings.files_dir", cfg.Recordings.FilesDir, "/var/calls"},
 		{"caddy.web_port", cfg.Caddy.WebPort, 8443},

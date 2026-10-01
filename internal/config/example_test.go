@@ -24,4 +24,7 @@ func TestExampleConfigLoads(t *testing.T) {
 	if len(cfg.Employees) == 0 {
 		t.Fatal("в примере не заполнен список [[employees]]")
 	}
+	if cfg.Okdesk.AutoLinkIssue {
+		t.Fatal("в примере okdesk.auto_link_issue должен быть false (привязку выполняет координатор)")
+	}
 }
