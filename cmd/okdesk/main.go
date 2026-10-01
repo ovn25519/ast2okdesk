@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/ovn25519/ast2okdesk/internal/ami"
+	"github.com/ovn25519/ast2okdesk/internal/caddy"
 	"github.com/ovn25519/ast2okdesk/internal/callflow"
 	"github.com/ovn25519/ast2okdesk/internal/cleanup"
 	"github.com/ovn25519/ast2okdesk/internal/config"
@@ -145,6 +146,12 @@ func run() int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// Генерируем Caddyfile и просим Caddy перечитать конфигурацию. Сбой Caddy не
+	// должен мешать основной функции сервиса, поэтому ошибка только логируется.
+	if err := applyCaddy(ctx, *configPath, cfg, logger); err != nil {
+		logger.Error("caddy: не удалось применить конфигурацию", "error", err)
+	}
+
 	var wg sync.WaitGroup
 	launch := func(name string, fn func(context.Context) error) {
 		wg.Add(1)
@@ -183,4 +190,31 @@ func run() int {
 
 	logger.Info("сервис остановлен")
 	return 0
+}
+
+// applyCaddy формирует Caddyfile рядом с файлом конфигурации и перезагружает
+// Caddy. Адрес площадки выводится из recordings.base_url.
+func applyCaddy(ctx context.Context, configPath string, cfg config.Config, logger *slog.Logger) error {
+	caddyCfg, err := caddy.FromRecordings(
+		cfg.Recordings.BaseURL,
+		cfg.Caddy.WebPort,
+		cfg.Caddy.DNSProvider,
+		cfg.Caddy.AllowedIPs,
+		cfg.Recordings.FilesDir,
+	)
+	if err != nil {
+		return err
+	}
+
+	dir := filepath.Dir(configPath)
+	manager, err := caddy.NewManager(
+		caddyCfg,
+		filepath.Join(dir, "Caddyfile"),
+		filepath.Join(dir, "caddy"),
+		logger,
+	)
+	if err != nil {
+		return err
+	}
+	return manager.Apply(ctx)
 }

@@ -1,0 +1,29 @@
+[Unit]
+Description=Caddy — HTTPS-раздача записей разговоров ast2okdesk
+Documentation=https://github.com/ovn25519/ast2okdesk
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+User=okdesk
+Group=okdesk
+# Учётные данные DNS-провайдера (например, REGRU_USERNAME/REGRU_PASSWORD).
+EnvironmentFile=/opt/ast2okdesk/caddy.env
+# Сертификаты и служебные данные Caddy хранятся рядом с сервисом.
+Environment=XDG_DATA_HOME=/opt/ast2okdesk/data
+Environment=XDG_CONFIG_HOME=/opt/ast2okdesk/data/config
+ExecStart=/opt/ast2okdesk/caddy run --config /opt/ast2okdesk/Caddyfile --adapter caddyfile
+ExecReload=/opt/ast2okdesk/caddy reload --config /opt/ast2okdesk/Caddyfile --adapter caddyfile
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=1048576
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/ast2okdesk
+
+[Install]
+WantedBy=multi-user.target

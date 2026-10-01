@@ -1,0 +1,17 @@
+# Файл сгенерирован сервисом ast2okdesk, ручные правки будут перезаписаны.
+# Листинг каталогов отключён: Caddy не отдаёт содержимое каталогов по умолчанию.
+https://calls.example.ru:8443 {
+	tls {
+		dns regru
+	}
+
+	handle_path /records/* {
+		@denied not remote_ip 203.0.113.10 198.51.100.0/24
+		respond @denied 403
+
+		root * /var/calls
+		file_server
+	}
+
+	respond 404
+}

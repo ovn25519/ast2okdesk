@@ -1,0 +1,25 @@
+[Unit]
+Description=ast2okdesk — интеграция Asterisk 16 с Okdesk
+Documentation=https://github.com/ovn25519/ast2okdesk
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=okdesk
+Group=okdesk
+WorkingDirectory=/opt/ast2okdesk
+ExecStart=/opt/ast2okdesk/okdesk -config /opt/ast2okdesk/config.toml
+Restart=on-failure
+RestartSec=5
+
+# Каталог сервиса (конфигурация, okdesk.db, Caddyfile) доступен на запись,
+# остальная файловая система — только для чтения.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/ast2okdesk
+
+[Install]
+WantedBy=multi-user.target
