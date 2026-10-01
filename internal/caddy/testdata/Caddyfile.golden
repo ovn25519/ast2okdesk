@@ -2,7 +2,10 @@
 # Листинг каталогов отключён: Caddy не отдаёт содержимое каталогов по умолчанию.
 https://calls.example.ru:8443 {
 	tls {
-		dns regru
+		dns regru {
+			username {$REGRU_USERNAME}
+			password {$REGRU_PASSWORD}
+		}
 	}
 
 	handle_path /records/* {

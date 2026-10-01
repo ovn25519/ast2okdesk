@@ -37,6 +37,20 @@ func TestRenderGolden(t *testing.T) {
 	}
 }
 
+func TestRenderIncludesDNSCredentials(t *testing.T) {
+	got := testConfig().Render()
+
+	for _, want := range []string{
+		"dns regru {",
+		"username {$REGRU_USERNAME}",
+		"password {$REGRU_PASSWORD}",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("в Caddyfile не найдено %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestRenderNormalizesURLPath(t *testing.T) {
 	cfg := testConfig()
 	cfg.RecordsURLPath = "records"

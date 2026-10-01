@@ -229,7 +229,8 @@ main() {
         log "службы перезапущены"
     else
         warn "требуется первичная настройка: заполните ${INSTALL_DIR}/config.toml и ${INSTALL_DIR}/caddy.env, затем выполните:"
-        warn "  systemctl start ${SERVICE_CADDY} ${SERVICE_OKDESK}"
+        warn "  systemctl start ${SERVICE_OKDESK}   # сгенерирует Caddyfile"
+        warn "  systemctl start ${SERVICE_CADDY}    # выпустит сертификат и начнёт раздачу записей"
     fi
 
     log "установка завершена. Проверка состояния: systemctl status ${SERVICE_OKDESK}"

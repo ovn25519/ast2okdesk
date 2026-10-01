@@ -97,7 +97,14 @@ func (c Config) Render() string {
 	b.WriteString("\ttls {\n")
 	b.WriteString("\t\tdns ")
 	b.WriteString(c.DNSProvider)
-	b.WriteString("\n\t}\n\n")
+	b.WriteString(" {\n")
+	// Учётные данные DNS-провайдера (reg.ru) подставляет Caddy из окружения
+	// процесса (EnvironmentFile=/opt/ast2okdesk/caddy.env), поэтому в файле
+	// хранятся только плейсхолдеры, а не секреты.
+	b.WriteString("\t\t\tusername {$REGRU_USERNAME}\n")
+	b.WriteString("\t\t\tpassword {$REGRU_PASSWORD}\n")
+	b.WriteString("\t\t}\n")
+	b.WriteString("\t}\n\n")
 	b.WriteString("\thandle_path ")
 	b.WriteString(c.pathPrefixPattern())
 	b.WriteString(" {\n")

@@ -189,18 +189,27 @@ cleanup_interval_minutes = 10
 ### Учётные данные DNS (caddy.env)
 
 Файл `/opt/ast2okdesk/caddy.env` (0600) подключается к
-`okdesk-caddy.service` как `EnvironmentFile` и содержит данные reg.ru:
+`okdesk-caddy.service` как `EnvironmentFile`. **Он обязателен для работы
+Caddy:** сертификат выпускается по DNS-01, для чего Caddy создаёт временную
+TXT-запись в зоне reg.ru, поэтому без логина и пароля API он не запустится
+(ошибка `missing username`).
 
 ```ini
 REGRU_USERNAME=<логин>
 REGRU_PASSWORD=<пароль>
 ```
 
+Используйте хост-аккаунт reg.ru с доступом к API (в панели reg.ru API должен
+быть включён, при необходимости — разрешён IP сервера). Секреты хранятся
+только в этом файле; в Caddyfile подставляются плейсхолдеры
+`{$REGRU_USERNAME}` и `{$REGRU_PASSWORD}`, которые Caddy раскрывает из
+окружения процесса.
+
 ### Применение
 
 ```bash
-sudo systemctl restart okdesk-caddy   # для DNS-кредов / первого старта
-sudo systemctl restart okdesk         # перечитает config.toml и перепишет Caddyfile
+sudo systemctl restart okdesk         # перечитает config.toml и перегенерирует Caddyfile
+sudo systemctl restart okdesk-caddy   # прочитает caddy.env и выпустит сертификат
 sudo systemctl status okdesk okdesk-caddy
 ```
 
