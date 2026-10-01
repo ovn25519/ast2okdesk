@@ -58,8 +58,10 @@ type Okdesk struct {
 	// BaseURL — базовый URL аккаунта, например https://intellektstroy.okdesk.ru
 	BaseURL  string `toml:"base_url"`
 	APIToken string `toml:"api_token"`
-	// TelephonyNumber — запасной внутренний номер Okdesk, если имя peer
-	// нечисловое и отсутствует в списке [[employees]]. Необязателен.
+	// TelephonyNumber — общий внутренний номер Okdesk. Если задан, подставляется
+	// для всех звонков вместо номера, пришедшего от Asterisk; точечные
+	// переопределения [[employees]] имеют приоритет. Если не задан, номер
+	// берётся из имени peer. Необязателен.
 	TelephonyNumber int `toml:"telephony_number"`
 	// IncomingPhoneNumber — входящий номер линии, попадает в receiver_phone.
 	IncomingPhoneNumber string `toml:"incoming_phone_number"`
@@ -218,8 +220,8 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.Okdesk.APIToken) == "" {
 		add("okdesk.api_token: обязательное поле не заполнено")
 	}
-	// TelephonyNumber необязателен: в типовом случае внутренний номер
-	// оператора совпадает с именем peer и берётся из самого события AMI.
+	// TelephonyNumber необязателен: если он не задан, внутренний номер
+	// оператора берётся из имени peer в событии AMI.
 	if strings.TrimSpace(c.Okdesk.IncomingPhoneNumber) == "" {
 		add("okdesk.incoming_phone_number: обязательное поле не заполнено")
 	}

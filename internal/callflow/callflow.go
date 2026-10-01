@@ -46,11 +46,13 @@ type Finalizer interface {
 type Config struct {
 	// Queue — имя мониторируемой очереди.
 	Queue string
-	// TelephonyNumber — запасной внутренний номер Okdesk, если имя peer
-	// нечисловое и отсутствует в Employees. Может быть 0.
+	// TelephonyNumber — общий внутренний номер Okdesk. Если задан (> 0),
+	// подставляется для всех звонков вместо номера, пришедшего от Asterisk;
+	// точечные переопределения Employees имеют приоритет над ним. Если не задан
+	// (0), номер берётся из имени peer.
 	TelephonyNumber int
-	// Employees — необязательные переопределения: peer → внутренний номер
-	// Okdesk. Имеют приоритет над номером, извлечённым из имени peer.
+	// Employees — точечные переопределения: peer → внутренний номер Okdesk.
+	// Имеют наивысший приоритет.
 	Employees map[string]int
 }
 
@@ -270,20 +272,24 @@ func (d *Dispatcher) ourQueue(f ami.Frame) bool {
 }
 
 // telephonyNumber возвращает внутренний номер Okdesk для оператора peer, а также
-// источник, откуда он взялся: «employees», «peer» или «fallback».
+// источник, откуда он взялся: «employees», «override» или «peer».
 //
-// Порядок: явное переопределение в [[employees]] → цифровое имя peer (основной
-// путь: оператор сам указывает свой внутренний номер в профиле Okdesk) →
-// okdesk.telephony_number (запасной вариант для нечисловых имён peer).
+// Порядок (первый сработавший источник даёт ответ):
+//  1. точечное переопределение в [[employees]];
+//  2. okdesk.telephony_number — если задан, подставляется всегда, независимо от
+//     того, какой peer пришёл от Asterisk;
+//  3. имя peer как есть, если оно числовое (okdesk.telephony_number не задан).
+//
+// Если ни один источник не дал номер, ok == false и screen-pop пропускается.
 func (d *Dispatcher) telephonyNumber(peer string) (number int, source string, ok bool) {
 	if n, found := d.cfg.Employees[peer]; found && n > 0 {
 		return n, "employees", true
 	}
+	if d.cfg.TelephonyNumber > 0 {
+		return d.cfg.TelephonyNumber, "override", true
+	}
 	if n, err := strconv.Atoi(peer); err == nil && n > 0 {
 		return n, "peer", true
-	}
-	if d.cfg.TelephonyNumber > 0 {
-		return d.cfg.TelephonyNumber, "fallback", true
 	}
 	return 0, "", false
 }

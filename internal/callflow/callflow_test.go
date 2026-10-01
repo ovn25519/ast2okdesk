@@ -129,9 +129,9 @@ func newDispatcher(st Store, pop ScreenPopper, cfg Config) *Dispatcher {
 	return d
 }
 
-func testConfig(t *testing.T, employees map[string]int, fallback int) Config {
+func testConfig(t *testing.T, employees map[string]int, override int) Config {
 	t.Helper()
-	return Config{Queue: "support", TelephonyNumber: fallback, Employees: employees}
+	return Config{Queue: "support", TelephonyNumber: override, Employees: employees}
 }
 
 func TestQueueCallerJoinSavesCall(t *testing.T) {
@@ -264,9 +264,10 @@ func TestAgentCalledRingall(t *testing.T) {
 	}
 }
 
-func TestAgentCalledFallbackNumber(t *testing.T) {
+func TestAgentCalledTelephonyNumberOverridesNonNumericPeer(t *testing.T) {
 	st := newFakeStore()
 	pop := &fakePop{}
+	// telephony_number задан — подставляется даже для нечислового имени peer.
 	d := newDispatcher(st, pop, testConfig(t, nil, 327))
 
 	if err := d.Handle(context.Background(), ev("AgentCalled",
@@ -278,7 +279,26 @@ func TestAgentCalledFallbackNumber(t *testing.T) {
 
 	got := pop.snapshot()
 	if len(got) != 1 || got[0].number != 327 {
-		t.Errorf("screen-pop = %+v, ожидался fallback-номер 327", got)
+		t.Errorf("screen-pop = %+v, ожидался override-номер 327", got)
+	}
+}
+
+func TestAgentCalledTelephonyNumberOverridesPeer(t *testing.T) {
+	st := newFakeStore()
+	pop := &fakePop{}
+	// telephony_number задан — он подставляется вместо номера из имени peer.
+	d := newDispatcher(st, pop, testConfig(t, nil, 999))
+
+	if err := d.Handle(context.Background(), ev("AgentCalled",
+		"Queue", "support", "Uniqueid", "u1",
+		"DestChannel", "SIP/327-0000000a", "CallerIDNum", "79990001122")); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	d.Wait()
+
+	got := pop.snapshot()
+	if len(got) != 1 || got[0].number != 999 {
+		t.Errorf("screen-pop = %+v, ожидался override-номер 999 вместо peer 327", got)
 	}
 }
 
@@ -320,7 +340,7 @@ func TestAgentCalledNonSIPChannelSkips(t *testing.T) {
 func TestAgentCalledPeerNumber(t *testing.T) {
 	st := newFakeStore()
 	pop := &fakePop{}
-	// Ни таблицы [[employees]], ни запасного номера: номер берётся из имени peer.
+	// Ни таблицы [[employees]], ни override-номера: номер берётся из имени peer.
 	d := newDispatcher(st, pop, testConfig(t, nil, 0))
 
 	if err := d.Handle(context.Background(), ev("AgentCalled",
@@ -357,8 +377,8 @@ func TestAgentCalledPJSIP(t *testing.T) {
 func TestAgentCalledEmployeesOverridePeer(t *testing.T) {
 	st := newFakeStore()
 	pop := &fakePop{}
-	// Явное переопределение имеет приоритет над цифровым именем peer.
-	d := newDispatcher(st, pop, testConfig(t, map[string]int{"327": 456}, 0))
+	// [[employees]] имеет приоритет и над override-номером, и над именем peer.
+	d := newDispatcher(st, pop, testConfig(t, map[string]int{"327": 456}, 999))
 
 	if err := d.Handle(context.Background(), ev("AgentCalled",
 		"Queue", "support", "Uniqueid", "u1",
