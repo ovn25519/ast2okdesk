@@ -61,10 +61,9 @@ type Okdesk struct {
 	// TelephonyNumber — общий внутренний номер Okdesk. Если задан, подставляется
 	// для всех звонков вместо номера, пришедшего от Asterisk; точечные
 	// переопределения [[employees]] имеют приоритет. Если не задан, номер
-	// берётся из имени peer. Необязателен.
+	// берётся из имени peer. Необязателен. Этот же номер уходит в receiver_phone
+	// записи о звонке — по нему Okdesk определяет ответившего сотрудника.
 	TelephonyNumber int `toml:"telephony_number"`
-	// IncomingPhoneNumber — входящий номер линии, попадает в receiver_phone.
-	IncomingPhoneNumber string `toml:"incoming_phone_number"`
 	// SearchNumbersCount — сколько последних цифр номера клиента использовать
 	// при поиске в Okdesk (1..10).
 	SearchNumbersCount int `toml:"search_numbers_count"`
@@ -223,9 +222,6 @@ func (c Config) Validate() error {
 	}
 	// TelephonyNumber необязателен: если он не задан, внутренний номер
 	// оператора берётся из имени peer в событии AMI.
-	if strings.TrimSpace(c.Okdesk.IncomingPhoneNumber) == "" {
-		add("okdesk.incoming_phone_number: обязательное поле не заполнено")
-	}
 	if c.Okdesk.SearchNumbersCount < 1 || c.Okdesk.SearchNumbersCount > 10 {
 		add("okdesk.search_numbers_count: должно быть в диапазоне 1..10, получено %d", c.Okdesk.SearchNumbersCount)
 	}

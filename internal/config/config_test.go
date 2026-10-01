@@ -22,7 +22,6 @@ ami_password = "ami-secret"
 base_url = "https://intellektstroy.okdesk.ru/"
 api_token = "okdesk-secret"
 telephony_number = 327
-incoming_phone_number = "+73430000000"
 search_numbers_count = 10
 auto_link_issue = true
 timezone = "Europe/Moscow"
@@ -62,7 +61,6 @@ ami_password = "p"
 base_url = "https://x.example"
 api_token = "t"
 telephony_number = 100
-incoming_phone_number = "+70000000000"
 
 [recordings]
 base_url = "https://calls.example/"
@@ -187,7 +185,6 @@ password = "p"
 base_url = "https://x.example"
 api_token = "t"
 telephony_number = 100
-incoming_phone_number = "+70000000000"
 
 [recordings]
 base_url = "https://calls.example/"
@@ -218,7 +215,6 @@ func validConfig() Config {
 	c.Okdesk.BaseURL = "https://intellektstroy.okdesk.ru"
 	c.Okdesk.APIToken = "okdesk-secret"
 	c.Okdesk.TelephonyNumber = 327
-	c.Okdesk.IncomingPhoneNumber = "+73430000000"
 	c.Recordings.BaseURL = "https://calls.example.ru:8443/records/"
 	c.Caddy.DNSCredentials = "regru-user:regru-pass"
 	c.Caddy.AllowedIPs = []string{"203.0.113.10", "198.51.100.0/24"}
@@ -247,7 +243,6 @@ func TestValidateErrors(t *testing.T) {
 		{"пустой okdesk.base_url", func(c *Config) { c.Okdesk.BaseURL = "" }, "okdesk.base_url"},
 		{"base_url не URL", func(c *Config) { c.Okdesk.BaseURL = "intellektstroy.okdesk.ru" }, "okdesk.base_url"},
 		{"пустой api_token", func(c *Config) { c.Okdesk.APIToken = "" }, "okdesk.api_token"},
-		{"пустой incoming_phone_number", func(c *Config) { c.Okdesk.IncomingPhoneNumber = "" }, "okdesk.incoming_phone_number"},
 		{"search_numbers_count=0", func(c *Config) { c.Okdesk.SearchNumbersCount = 0 }, "okdesk.search_numbers_count"},
 		{"search_numbers_count=11", func(c *Config) { c.Okdesk.SearchNumbersCount = 11 }, "okdesk.search_numbers_count"},
 		{"неизвестный timezone Okdesk", func(c *Config) { c.Okdesk.Timezone = "Mars/Olympus" }, "okdesk.timezone"},

@@ -282,11 +282,20 @@ func (d *Dispatcher) ourQueue(f ami.Frame) bool {
 //
 // Если ни один источник не дал номер, ok == false и screen-pop пропускается.
 func (d *Dispatcher) telephonyNumber(peer string) (number int, source string, ok bool) {
-	if n, found := d.cfg.Employees[peer]; found && n > 0 {
+	return ResolveTelephonyNumber(peer, d.cfg.Employees, d.cfg.TelephonyNumber)
+}
+
+// ResolveTelephonyNumber возвращает внутренний номер Okdesk для оператора peer и
+// источник: «employees», «override» или «peer».
+//
+// Тот же номер используется и для receiver_phone записи о звонке, поэтому
+// функция общая для диспетчера (screen-pop) и финализатора (журналирование).
+func ResolveTelephonyNumber(peer string, employees map[string]int, override int) (number int, source string, ok bool) {
+	if n, found := employees[peer]; found && n > 0 {
 		return n, "employees", true
 	}
-	if d.cfg.TelephonyNumber > 0 {
-		return d.cfg.TelephonyNumber, "override", true
+	if override > 0 {
+		return override, "override", true
 	}
 	if n, err := strconv.Atoi(peer); err == nil && n > 0 {
 		return n, "peer", true

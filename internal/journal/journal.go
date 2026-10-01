@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/ovn25519/ast2okdesk/internal/ami"
+	"github.com/ovn25519/ast2okdesk/internal/callflow"
 	"github.com/ovn25519/ast2okdesk/internal/okdesk"
 	"github.com/ovn25519/ast2okdesk/internal/store"
 )
@@ -49,8 +50,11 @@ type Recordings interface {
 
 // Config — параметры финализатора.
 type Config struct {
-	// IncomingPhoneNumber — входящий номер, попадающий в receiver_phone.
-	IncomingPhoneNumber string
+	// Employees — точечные переопределения: peer → внутренний номер Okdesk.
+	Employees map[string]int
+	// TelephonyNumber — общий внутренний номер Okdesk (override). Вместе с
+	// Employees используется для определения receiver_phone ответившего оператора.
+	TelephonyNumber int
 	// CdrTimeout — сколько ждать событие Cdr после Hangup.
 	CdrTimeout time.Duration
 	// RetryInitialBackoff — задержка первой повторной отправки при сбое.
@@ -221,6 +225,34 @@ func (j *Finalizer) finalize(ctx context.Context, uniqueid string, cdr ami.Frame
 		return
 	}
 
+	// Звонки, не принятые оператором (брошенные), в Okdesk не отправляются:
+	// в записи о звонке нечем заполнить receiver_phone (обязательное поле).
+	if call.Status != store.StatusAnswered {
+		j.log.Info("журналирование: звонок не принят оператором, запись пропущена",
+			"uniqueid", uniqueid, "status", call.Status)
+		j.cleanupCall(ctx, uniqueid)
+		return
+	}
+
+	// receiver_phone = внутренний номер ответившего оператора: по нему Okdesk
+	// определяет сотрудника в списке звонков. Порядок тот же, что и для
+	// screen-pop (employees → override → числовое имя peer).
+	number, _, ok := callflow.ResolveTelephonyNumber(call.AgentPeer, j.cfg.Employees, j.cfg.TelephonyNumber)
+	if !ok {
+		j.log.Warn("журналирование: не удалось определить внутренний номер ответившего оператора, запись пропущена",
+			"uniqueid", uniqueid, "peer", call.AgentPeer)
+		j.cleanupCall(ctx, uniqueid)
+		return
+	}
+	receiver := strconv.Itoa(number)
+
+	j.log.Info("журналирование: данные Cdr", "uniqueid", uniqueid,
+		"start_time", cdr.Get("StartTime"),
+		"answer_time", cdr.Get("AnswerTime"),
+		"end_time", cdr.Get("EndTime"),
+		"duration", cdr.Get("Duration"),
+		"billable_seconds", cdr.Get("BillableSeconds"))
+
 	startedAt, finishedAt, duration, fileStart := j.timing(call, cdr)
 
 	fileURL := ""
@@ -240,7 +272,7 @@ func (j *Finalizer) finalize(ctx context.Context, uniqueid string, cdr ami.Frame
 		Duration:      duration,
 		Direction:     okdesk.DirectionIncoming,
 		SourcePhone:   call.CallerIDNum,
-		ReceiverPhone: j.cfg.IncomingPhoneNumber,
+		ReceiverPhone: receiver,
 		FileURL:       fileURL,
 		IssueID:       issueID,
 	})
@@ -315,23 +347,21 @@ func (j *Finalizer) timing(call store.Call, cdr ami.Frame) (startedAt, finishedA
 			cdrEnd = t
 		}
 	}
-	duration = parseSeconds(cdr.Get("BillableSeconds"))
-	if duration <= 0 {
-		duration = parseSeconds(cdr.Get("Duration"))
-	}
-
+	// Начало разговора — время ответа оператора: запись ведётся от ответа до
+	// отбоя, без ожидания в очереди и музыки.
 	startedAt = cdrAnswer
-	if startedAt.IsZero() {
-		startedAt = cdrStart
-	}
 	if startedAt.IsZero() {
 		if call.AnsweredAt != nil {
 			startedAt = *call.AnsweredAt
 		} else {
-			startedAt = call.CreatedAt
+			startedAt = cdrStart
 		}
 	}
+	if startedAt.IsZero() {
+		startedAt = call.CreatedAt
+	}
 
+	// Минута в имени файла — по времени постановки в очередь (начало Cdr).
 	fileStart = cdrStart
 	if fileStart.IsZero() {
 		fileStart = call.CreatedAt
@@ -348,25 +378,13 @@ func (j *Finalizer) timing(call store.Call, cdr ami.Frame) (startedAt, finishedA
 	if finishedAt.Before(startedAt) {
 		finishedAt = startedAt
 	}
-	if duration <= 0 {
-		if d := int(finishedAt.Sub(startedAt).Seconds()); d > 0 {
-			duration = d
-		}
+
+	// Длительность = разговор от ответа до отбоя: совпадает с длиной записи.
+	duration = int(finishedAt.Sub(startedAt).Seconds())
+	if duration < 0 {
+		duration = 0
 	}
 	return startedAt, finishedAt, duration, fileStart
-}
-
-// parseSeconds разбирает неотрицательное целое из строки Cdr.
-func parseSeconds(raw string) int {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return 0
-	}
-	n, err := strconv.Atoi(raw)
-	if err != nil || n < 0 {
-		return 0
-	}
-	return n
 }
 
 // Wait ожидает завершения обработки всех начатых звонков.

@@ -173,6 +173,7 @@ var (
 		Uniqueid:    "u1",
 		CallerIDNum: "79990001122",
 		Status:      store.StatusAnswered,
+		AgentPeer:   "327",
 		CreatedAt:   t0,
 		AnsweredAt:  &tAnswer,
 	}
@@ -183,7 +184,7 @@ func TestOnHangupThenCdr(t *testing.T) {
 	st.put(baseCall)
 	cl := &fakeClient{issueID: 42, issueOK: true}
 	fin := newFinalizer(st, cl, Config{
-		IncomingPhoneNumber: "+78005553535",
+		TelephonyNumber:     327,
 		CdrTimeout:          time.Second,
 		RetryInitialBackoff: time.Second,
 	})
@@ -206,7 +207,7 @@ func TestOnHangupThenCdr(t *testing.T) {
 	if !ok {
 		t.Fatal("phone_call не собран")
 	}
-	if pc.CallID != "u1" || pc.SourcePhone != "79990001122" || pc.ReceiverPhone != "+78005553535" {
+	if pc.CallID != "u1" || pc.SourcePhone != "79990001122" || pc.ReceiverPhone != "327" {
 		t.Errorf("phone_call = %+v", pc)
 	}
 	if !pc.StartedAt.Equal(tAnswer) || !pc.FinishedAt.Equal(tEnd) {
@@ -247,7 +248,7 @@ func TestCdrTimeoutFallsBackToCorrelation(t *testing.T) {
 	st.put(baseCall)
 	cl := &fakeClient{}
 	fin := newFinalizer(st, cl, Config{
-		IncomingPhoneNumber: "+78005553535",
+		TelephonyNumber:     327,
 		CdrTimeout:          40 * time.Millisecond,
 		RetryInitialBackoff: time.Second,
 	})
@@ -280,7 +281,7 @@ func TestSendFailureEnqueuesRetry(t *testing.T) {
 	st.put(baseCall)
 	cl := &fakeClient{sendErr: errors.New("сеть недоступна")}
 	fin := newFinalizer(st, cl, Config{
-		IncomingPhoneNumber: "+78005553535",
+		TelephonyNumber:     327,
 		CdrTimeout:          time.Second,
 		RetryInitialBackoff: 5 * time.Second,
 	})
@@ -366,14 +367,72 @@ func TestIssueLookupErrorIgnored(t *testing.T) {
 	}
 }
 
-// TestAutoLinkDisabled проверяет, что при AutoLinkIssue=false поиск заявки не
+// TestAbandonedCallNotJournaled проверяет, что брошенные звонки (оператор не
+// ответил) в Okdesk не отправляются, но корреляция и дедупликация удаляются.
+func TestAbandonedCallNotJournaled(t *testing.T) {
+	st := newFakeStore()
+	st.put(store.Call{
+		Uniqueid:    "u2",
+		CallerIDNum: "79990001122",
+		Status:      store.StatusAbandoned,
+		CreatedAt:   t0,
+	})
+	cl := &fakeClient{}
+	fin := newFinalizer(st, cl, Config{CdrTimeout: time.Second, TelephonyNumber: 327})
+
+	if err := fin.OnHangup(context.Background(), hangupFrame("u2")); err != nil {
+		t.Fatalf("OnHangup: %v", err)
+	}
+	fin.OnCdr(context.Background(), ami.NewFrame(map[string]string{"Event": "Cdr", "UniqueID": "u2"}))
+	fin.Wait()
+
+	if _, ok := cl.lastBuilt(); ok {
+		t.Error("брошенный звонок не должен журналироваться")
+	}
+	if cl.sendCount() != 0 {
+		t.Errorf("отправок = %d, ожидалось 0", cl.sendCount())
+	}
+	if !st.containsDeleted("u2") {
+		t.Error("корреляция брошенного звонка должна удаляться")
+	}
+}
+
+// TestAnsweredWithoutNumberSkipped проверяет, что если внутренний номер
+// ответившего оператора определить не удалось, запись не отправляется.
+func TestAnsweredWithoutNumberSkipped(t *testing.T) {
+	st := newFakeStore()
+	st.put(store.Call{
+		Uniqueid:    "u3",
+		CallerIDNum: "79990001122",
+		Status:      store.StatusAnswered,
+		AgentPeer:   "ivan",
+		CreatedAt:   t0,
+		AnsweredAt:  &tAnswer,
+	})
+	cl := &fakeClient{}
+	fin := newFinalizer(st, cl, Config{CdrTimeout: time.Second})
+
+	if err := fin.OnHangup(context.Background(), hangupFrame("u3")); err != nil {
+		t.Fatalf("OnHangup: %v", err)
+	}
+	fin.OnCdr(context.Background(), ami.NewFrame(map[string]string{"Event": "Cdr", "UniqueID": "u3"}))
+	fin.Wait()
+
+	if _, ok := cl.lastBuilt(); ok {
+		t.Error("без внутреннего номера запись отправлять нельзя")
+	}
+	if !st.containsDeleted("u3") {
+		t.Error("корреляция должна удаляться")
+	}
+}
+
 // выполняется вовсе, а запись уходит в Okdesk без issue_id.
 func TestAutoLinkDisabled(t *testing.T) {
 	st := newFakeStore()
 	st.put(baseCall)
 	cl := &fakeClient{issueID: 42, issueOK: true}
 	fin := New(st, cl, recording.New("https://rec/", time.UTC), Config{
-		IncomingPhoneNumber: "+78005553535",
+		TelephonyNumber:     327,
 		CdrTimeout:          time.Second,
 		RetryInitialBackoff: time.Second,
 		AutoLinkIssue:       false,

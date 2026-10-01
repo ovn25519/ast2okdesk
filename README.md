@@ -147,8 +147,7 @@ ami_password = "<AMI_PASSWORD>"   # обязательно, только в conf
 [okdesk]
 base_url = "https://intellektstroy.okdesk.ru"  # обязательно
 api_token = "<OKDESK_API_TOKEN>"               # обязательный ключ «Администратор»
-telephony_number = 327           # если задан — подставляется всегда (см. ниже)
-incoming_phone_number = "<...>"  # обязательно, → receiver_phone
+telephony_number = 327           # если задан — подставляется всегда (см. ниже); он же → receiver_phone
 search_numbers_count = 10        # 1..10
 auto_link_issue = false          # false — Okdesk сам привяжет запись звонка к заявкам (см. ниже)
 timezone = "Europe/Moscow"       # пояс аккаунта Okdesk
@@ -270,8 +269,8 @@ Asterisk. Параметр жёстко переопределяет номер 
 
 **Если ни один шаг не дал номер** (пир нечисловой, `telephony_number` не задан,
 записи в таблице нет) — screen-pop не отправляется, в лог пишется
-предупреждение. Звонок при этом не теряется: он всё равно будет журналирован,
-просто попапа у оператора не будет.
+предупреждение. Этот же номер нужен для `receiver_phone` записи о звонке,
+поэтому без него запись в Okdesk не создаётся.
 
 #### Примеры
 
@@ -306,15 +305,19 @@ Asterisk. Параметр жёстко переопределяет номер 
 
 1. `Hangup` по известному `Uniqueid` → звонок помечается завершённым, сервис
    ждёт `Cdr` (до 10 с).
-2. По `Cdr`: `started_at = AnswerTime ?: StartTime`, `finished_at = EndTime`,
-   `duration = BillableSeconds ?: Duration`, `direction = 0` (входящий),
-   `source_phone = CallerIDNum`, `receiver_phone = incoming_phone_number`,
+2. По `Cdr`: `started_at = AnswerTime` (начало разговора; запасной вариант —
+   `StartTime`), `finished_at = EndTime`, `duration = finished_at − started_at`
+   (длительность разговора — совпадает с длиной записи), `direction = 0`
+   (входящий), `source_phone = CallerIDNum`,
+   `receiver_phone` = внутренний номер ответившего оператора (тот же, что ушёл в
+   screen-pop; по нему Okdesk определяет сотрудника),
    `file_url = recordings.base_url + имя файла`.
 3. Если включена автопривязка (`auto_link_issue = true`) — ищется открытая
    заявка клиента и передаётся `issue_id` (см. «Автопривязка заявки»); иначе шаг
    пропускается.
-4. Отправляется `POST /api/v1/phone_calls`. **Журналируются все звонки,
-   получившие `Cdr`** — и отвеченные, и брошенные.
+4. Отправляется `POST /api/v1/phone_calls`. **Журналируются только звонки,
+   принятые оператором** (`AgentConnect`): у брошенных нет ответившего, а поле
+   `receiver_phone` в API обязательное.
 5. При сбое запись попадает в очередь retry; корреляция и дедупликация удаляются
    после завершения обработки звонка.
 
@@ -427,6 +430,11 @@ journalctl -u okdesk-caddy -f
   сообщит о неизвестных ключах) — переименуйте ключи. Также появился
   `okdesk.auto_link_issue` (по умолчанию `false`): для прежнего поведения с
   автоматической привязкой заявки добавьте `auto_link_issue = true`.
+- **Миграция с v0.4.3 и ранее:** удалён параметр `okdesk.incoming_phone_number`
+  (номер компании больше не нужен) — уберите его из `config.toml`, иначе сервис
+  не запустится (сообщит о неизвестных ключах). Теперь в `receiver_phone` записи
+  о звонке уходит внутренний номер ответившего оператора (по нему Okdesk
+  определяет сотрудника), а звонки без ответа оператора в Okdesk не отправляются.
 
 ## Разработка
 

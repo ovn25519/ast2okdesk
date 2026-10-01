@@ -116,7 +116,8 @@ func run() int {
 	}, logger)
 
 	finalizer := journal.New(st, okClient, loc, journal.Config{
-		IncomingPhoneNumber: cfg.Okdesk.IncomingPhoneNumber,
+		Employees:           employees,
+		TelephonyNumber:     cfg.Okdesk.TelephonyNumber,
 		RetryInitialBackoff: time.Duration(cfg.Retry.InitialBackoffSeconds) * time.Second,
 		AutoLinkIssue:       cfg.Okdesk.AutoLinkIssue,
 	}, logger)
