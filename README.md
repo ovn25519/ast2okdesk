@@ -29,11 +29,11 @@ MP3-запись разговора.
 
 ```
 Asterisk 16
-   │  AMI (события очереди + Cdr)             /var/calls/*.mp3
-   ▼                                                 │
-okdesk (Go-сервис)  ── SQLite (retry/корреляция/дедуп)
-   │  REST API                                       │
-   ▼                                                 ▼
+   │  AMI (события очереди + Cdr)               /var/calls/*.mp3
+   ▼                                                   │
+okdesk (Go-сервис)  ── SQLite (retry/корреляция/дедуп) |
+   │  REST API                                         │
+   ▼                                                   ▼
 Okdesk  ◀──── issue_id / phone_call ─────────  Caddy (HTTPS, allowlist)
 ```
 
@@ -314,19 +314,6 @@ make build         # CGO_ENABLED=0, статический бинарник
 
 Зависимости — только `github.com/BurntSushi/toml` и `modernc.org/sqlite`
 (pure Go, без CGO). Версия Go — 1.24.
-
-## Отступления от первоначального ТЗ
-
-1. Параметры Asterisk объединены в секцию `[asterisk]`, подключение к AMI —
-   плоские ключи `ami_host`, `ami_port`, `ami_user`, `ami_password` внутри неё
-   (вместо секций `[route]` и `[ami]`).
-2. Добавлен параметр `caddy.allowed_ips` — allowlist доступа к записям.
-3. Обрабатываются только **входящие** звонки очереди; исходящие не журналируются.
-4. Внутренний номер оператора для screen-pop берётся из имени peer (`SIP`/`PJSIP`)
-   напрямую; `okdesk.telephony_number` и `[[employees]]` — необязательные
-   переопределения (в ТЗ номер выбирался сопоставлением по таблице).
-5. Автопривязка заявки сделана отключаемой (`okdesk.auto_link_issue`, по
-   умолчанию выключена); в ТЗ звонок привязывался к заявке всегда.
 
 ## Лицензия
 
