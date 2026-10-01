@@ -175,10 +175,9 @@ func (c *Client) SendPhoneCall(ctx context.Context, payload []byte) error {
 
 // FindIssueID подбирает открытую заявку клиента для автопривязки.
 //
-// Порядок: контакт по номеру → открытые заявки контакта; при отсутствии контакта
-// или заявок — компания по номеру → заявки компании. Среди открытых заявок
-// приоритет отдаётся заявке, где звонящий — инициатор/наблюдатель, затем —
-// заявке с ближайшим deadline_at. Если ничего не найдено, ok == false.
+// Порядок: контакт по номеру → его открытые заявки; при отсутствии контакта или
+// заявок — компания по номеру → её открытые заявки. Из найденных заявок
+// выбирается самая свежая (см. SelectIssue). Если ничего не найдено, ok == false.
 func (c *Client) FindIssueID(ctx context.Context, phone string) (int, bool, error) {
 	contactID, companyID, foundContact, err := c.findContact(ctx, phone)
 	if err != nil {
@@ -189,7 +188,7 @@ func (c *Client) FindIssueID(ctx context.Context, phone string) (int, bool, erro
 		if err != nil {
 			return 0, false, err
 		}
-		if id, ok := SelectIssue(issues, contactID); ok {
+		if id, ok := SelectIssue(issues); ok {
 			return id, true, nil
 		}
 	}
@@ -209,7 +208,7 @@ func (c *Client) FindIssueID(ctx context.Context, phone string) (int, bool, erro
 		if err != nil {
 			return 0, false, err
 		}
-		if id, ok := SelectIssue(issues, contactID); ok {
+		if id, ok := SelectIssue(issues); ok {
 			return id, true, nil
 		}
 	}
@@ -218,69 +217,43 @@ func (c *Client) FindIssueID(ctx context.Context, phone string) (int, bool, erro
 
 // Issue — открытая заявка Okdesk в объёме, нужном для выбора.
 type Issue struct {
-	ID          int
-	DeadlineAt  *time.Time
-	AuthorID    int
-	ObserverIDs []int
+	ID        int
+	CreatedAt *time.Time
 }
 
-// involves сообщает, является ли контакт инициатором или наблюдателем заявки.
-func (i Issue) involves(contactID int) bool {
-	if contactID <= 0 {
-		return false
-	}
-	if i.AuthorID == contactID {
-		return true
-	}
-	for _, id := range i.ObserverIDs {
-		if id == contactID {
-			return true
-		}
-	}
-	return false
-}
-
-// SelectIssue выбирает заявку для привязки: сначала среди заявок, где звонящий —
-// инициатор или наблюдатель, затем по ближайшему deadline_at (заявки без
-// deadline считаются последними, при равенстве выбирается меньший id).
-func SelectIssue(issues []Issue, contactID int) (int, bool) {
+// SelectIssue выбирает самую свежую заявку: по created_at, а при его отсутствии
+// — по наибольшему id (id в Okdesk растут последовательно). Если список пуст,
+// ok == false.
+func SelectIssue(issues []Issue) (int, bool) {
 	if len(issues) == 0 {
 		return 0, false
 	}
 
-	preferred := make([]Issue, 0, len(issues))
-	for _, issue := range issues {
-		if issue.involves(contactID) {
-			preferred = append(preferred, issue)
-		}
-	}
-	candidates := issues
-	if len(preferred) > 0 {
-		candidates = preferred
-	}
-
-	best := candidates[0]
-	for _, issue := range candidates[1:] {
-		if closerDeadline(issue, best) {
+	best := issues[0]
+	for _, issue := range issues[1:] {
+		if newerIssue(issue, best) {
 			best = issue
 		}
 	}
 	return best.ID, true
 }
 
-// closerDeadline сообщает, что заявка a приоритетнее b по сроку решения.
-func closerDeadline(a, b Issue) bool {
+// newerIssue сообщает, что заявка a свежее заявки b. Заявка с известной датой
+// создания считается свежее заявки без даты; при равных датах и при их
+// отсутствии сравниваются id.
+func newerIssue(a, b Issue) bool {
 	switch {
-	case a.DeadlineAt == nil && b.DeadlineAt == nil:
-		return a.ID < b.ID
-	case a.DeadlineAt == nil:
-		return false
-	case b.DeadlineAt == nil:
+	case a.CreatedAt != nil && b.CreatedAt != nil:
+		if a.CreatedAt.Equal(*b.CreatedAt) {
+			return a.ID > b.ID
+		}
+		return a.CreatedAt.After(*b.CreatedAt)
+	case a.CreatedAt != nil:
 		return true
-	case a.DeadlineAt.Equal(*b.DeadlineAt):
-		return a.ID < b.ID
+	case b.CreatedAt != nil:
+		return false
 	default:
-		return a.DeadlineAt.Before(*b.DeadlineAt)
+		return a.ID > b.ID
 	}
 }
 
@@ -373,17 +346,9 @@ func (c *Client) listIssues(ctx context.Context, contactID, companyID int) ([]Is
 			continue
 		}
 		issue := Issue{ID: dto.ID}
-		if dto.Author != nil {
-			issue.AuthorID = dto.Author.ID
-		}
-		for _, o := range dto.Observers {
-			if o.ID > 0 {
-				issue.ObserverIDs = append(issue.ObserverIDs, o.ID)
-			}
-		}
-		if dto.DeadlineAt != nil {
-			if t, found := parseDeadline(*dto.DeadlineAt); found {
-				issue.DeadlineAt = &t
+		if dto.CreatedAt != nil {
+			if t, found := parseAPITime(*dto.CreatedAt); found {
+				issue.CreatedAt = &t
 			}
 		}
 		issues = append(issues, issue)
@@ -511,10 +476,8 @@ type contactDTO struct {
 }
 
 type issueDTO struct {
-	ID         int     `json:"id"`
-	DeadlineAt *string `json:"deadline_at"`
-	Author     *idDTO  `json:"author"`
-	Observers  []idDTO `json:"observers"`
+	ID        int     `json:"id"`
+	CreatedAt *string `json:"created_at"`
 }
 
 // lastDigits оставляет последние n цифр номера (нецифровые символы, включая «+»,
@@ -532,20 +495,21 @@ func lastDigits(phone string, n int) string {
 	return string(digits)
 }
 
-var deadlineLayouts = []string{
+var apiTimeLayouts = []string{
 	"2006-01-02 15:04:05",
 	"2006-01-02T15:04:05",
 	time.RFC3339,
 	"2006-01-02",
 }
 
-// parseDeadline разбирает deadline_at в одном из поддерживаемых форматов.
-func parseDeadline(raw string) (time.Time, bool) {
+// parseAPITime разбирает время из ответа Okdesk (created_at, deadline_at и т.п.)
+// в одном из поддерживаемых форматов.
+func parseAPITime(raw string) (time.Time, bool) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return time.Time{}, false
 	}
-	for _, layout := range deadlineLayouts {
+	for _, layout := range apiTimeLayouts {
 		if t, err := time.Parse(layout, raw); err == nil {
 			return t, true
 		}

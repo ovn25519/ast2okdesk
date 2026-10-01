@@ -234,7 +234,7 @@ func TestFindIssueIDByContact(t *testing.T) {
 	})
 	mux.HandleFunc("/api/v1/issues/list", func(w http.ResponseWriter, r *http.Request) {
 		issuesQuery = r.URL.Query()
-		writeJSON(w, http.StatusOK, `{"issues":[{"id":5,"deadline_at":"2026-09-30 12:00:00","author":{"id":9}}]}`)
+		writeJSON(w, http.StatusOK, `{"issues":[{"id":5,"created_at":"2026-09-30 12:00:00"}]}`)
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
@@ -253,15 +253,15 @@ func TestFindIssueIDByContact(t *testing.T) {
 	}
 }
 
-func TestFindIssueIDPrefersInvolvedIssue(t *testing.T) {
+func TestFindIssueIDPicksMostRecent(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/contacts/", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, `{"contacts":[{"id":9}]}`)
 	})
 	mux.HandleFunc("/api/v1/issues/list", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, `{"issues":[
-			{"id":8,"deadline_at":"2026-09-30 10:00:00"},
-			{"id":7,"deadline_at":"2026-09-30 18:00:00","observers":[{"id":9}]}
+			{"id":8,"created_at":"2026-09-01 10:00:00"},
+			{"id":7,"created_at":"2026-09-20 18:00:00"}
 		]}`)
 	})
 	srv := httptest.NewServer(mux)
@@ -274,25 +274,21 @@ func TestFindIssueIDPrefersInvolvedIssue(t *testing.T) {
 	}
 }
 
-func TestFindIssueIDNearestDeadline(t *testing.T) {
+func TestFindIssueIDPicksMaxIDWithoutCreatedAt(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/contacts/", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, `{"contacts":[{"id":9}]}`)
 	})
 	mux.HandleFunc("/api/v1/issues/list", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, `{"issues":[
-			{"id":1,"deadline_at":"2026-09-30 18:00:00","author":{"id":9}},
-			{"id":2,"deadline_at":"2026-09-30 10:00:00","author":{"id":9}},
-			{"id":3,"author":{"id":9}}
-		]}`)
+		writeJSON(w, http.StatusOK, `{"issues":[{"id":1},{"id":3},{"id":2}]}`)
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
 	c := testClient(t, srv, time.UTC)
 	id, ok, err := c.FindIssueID(context.Background(), "79991234567")
-	if err != nil || !ok || id != 2 {
-		t.Fatalf("FindIssueID = (%d, %v, %v), ожидалось (2, true, nil)", id, ok, err)
+	if err != nil || !ok || id != 3 {
+		t.Fatalf("FindIssueID = (%d, %v, %v), ожидалось (3, true, nil)", id, ok, err)
 	}
 }
 
@@ -307,7 +303,7 @@ func TestFindIssueIDCompanyFallback(t *testing.T) {
 	var companyQuery url.Values
 	mux.HandleFunc("/api/v1/issues/list", func(w http.ResponseWriter, r *http.Request) {
 		companyQuery = r.URL.Query()
-		writeJSON(w, http.StatusOK, `{"issues":[{"id":4,"deadline_at":"2026-09-30 12:00:00"}]}`)
+		writeJSON(w, http.StatusOK, `{"issues":[{"id":4,"created_at":"2026-09-30 12:00:00"}]}`)
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
@@ -346,7 +342,7 @@ func TestFindIssueIDTopLevelArray(t *testing.T) {
 		writeJSON(w, http.StatusOK, `[{"id":9}]`)
 	})
 	mux.HandleFunc("/api/v1/issues/list", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, `[{"id":11,"deadline_at":"2026-09-30T12:00:00"}]`)
+		writeJSON(w, http.StatusOK, `[{"id":11,"created_at":"2026-09-30T12:00:00"}]`)
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
@@ -364,38 +360,39 @@ func TestSelectIssue(t *testing.T) {
 	pt0, pt1 := &t0, &t1
 
 	cases := []struct {
-		name      string
-		issues    []Issue
-		contactID int
-		wantID    int
-		wantOK    bool
+		name   string
+		issues []Issue
+		wantID int
+		wantOK bool
 	}{
-		{"пусто", nil, 9, 0, false},
-		{"наблюдатель важнее срока", []Issue{
-			{ID: 8, DeadlineAt: pt0},
-			{ID: 7, DeadlineAt: pt1, ObserverIDs: []int{9}},
-		}, 9, 7, true},
-		{"инициатор важнее срока", []Issue{
-			{ID: 8, DeadlineAt: pt0},
-			{ID: 7, DeadlineAt: pt1, AuthorID: 9},
-		}, 9, 7, true},
-		{"ближайший deadline", []Issue{
-			{ID: 1, DeadlineAt: pt1},
-			{ID: 2, DeadlineAt: pt0},
-		}, 0, 2, true},
-		{"заявка без срока последняя", []Issue{
+		{"пусто", nil, 0, false},
+		{"свежее по created_at", []Issue{
+			{ID: 8, CreatedAt: pt0},
+			{ID: 7, CreatedAt: pt1},
+		}, 7, true},
+		{"created_at важнее id", []Issue{
+			{ID: 9, CreatedAt: pt0},
+			{ID: 7, CreatedAt: pt1},
+		}, 7, true},
+		{"равное created_at — больший id", []Issue{
+			{ID: 7, CreatedAt: pt0},
+			{ID: 3, CreatedAt: pt0},
+		}, 7, true},
+		{"без created_at — больший id", []Issue{
 			{ID: 1},
-			{ID: 2, DeadlineAt: pt1},
-		}, 0, 2, true},
-		{"равный срок — меньший id", []Issue{
-			{ID: 7, DeadlineAt: pt0},
-			{ID: 3, DeadlineAt: pt0},
-		}, 0, 3, true},
-		{"единственная без срока", []Issue{{ID: 4}}, 0, 4, true},
+			{ID: 5},
+			{ID: 2},
+		}, 5, true},
+		{"заявка с датой важнее заявки без даты", []Issue{
+			{ID: 9},
+			{ID: 2, CreatedAt: pt0},
+		}, 2, true},
+		{"единственная без created_at", []Issue{{ID: 4}}, 4, true},
+		{"единственная с created_at", []Issue{{ID: 4, CreatedAt: pt0}}, 4, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			id, ok := SelectIssue(c.issues, c.contactID)
+			id, ok := SelectIssue(c.issues)
 			if ok != c.wantOK || id != c.wantID {
 				t.Errorf("SelectIssue = (%d, %v), ожидалось (%d, %v)", id, ok, c.wantID, c.wantOK)
 			}
@@ -423,7 +420,7 @@ func TestLastDigits(t *testing.T) {
 	}
 }
 
-func TestParseDeadline(t *testing.T) {
+func TestParseAPITime(t *testing.T) {
 	valid := []string{
 		"2026-09-30 12:00:00",
 		"2026-09-30T12:00:00",
@@ -431,13 +428,13 @@ func TestParseDeadline(t *testing.T) {
 		"2026-09-30",
 	}
 	for _, raw := range valid {
-		if _, ok := parseDeadline(raw); !ok {
-			t.Errorf("parseDeadline(%q) = false, ожидалось true", raw)
+		if _, ok := parseAPITime(raw); !ok {
+			t.Errorf("parseAPITime(%q) = false, ожидалось true", raw)
 		}
 	}
 	for _, raw := range []string{"", "не дата", "30.09.2026"} {
-		if _, ok := parseDeadline(raw); ok {
-			t.Errorf("parseDeadline(%q) = true, ожидалось false", raw)
+		if _, ok := parseAPITime(raw); ok {
+			t.Errorf("parseAPITime(%q) = true, ожидалось false", raw)
 		}
 	}
 }
