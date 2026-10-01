@@ -79,8 +79,6 @@ config.example.toml    пример конфигурации
    write =                      ; originate/command не нужны
    permit = 127.0.0.1/255.255.255.255
    ```
-   Событие `Cdr` и модуль `cdr_manager` сервису **не нужны**: времена берутся из
-   событий очереди (`AgentConnect`, `Hangup`).
 2. **События вызова оператора** в настройках мониторируемой очереди:
    ```ini
    ; /etc/asterisk/queues.conf
