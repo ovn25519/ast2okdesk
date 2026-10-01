@@ -320,8 +320,11 @@ Asterisk. Параметр жёстко переопределяет номер 
 
 1. `Hangup` по известному `Uniqueid` → звонок помечается завершённым, сервис
    ждёт `Cdr` (до 10 с).
-2. По `Cdr`: `started_at = AnswerTime` (начало разговора; запасной вариант —
-   `StartTime`), `finished_at = EndTime`, `duration = finished_at − started_at`
+2. `started_at` — начало разговора: время ответа **оператора** (событие AMI
+   `AgentConnect`, сохраняется в БД). Запасные варианты — `Cdr.AnswerTime`, затем
+   `StartTime`: в очереди `Cdr.AnswerTime` фиксирует ответ вызывающему каналу
+   (музыку/IVR), а не подключение оператора. `finished_at = EndTime`,
+   `duration = finished_at − started_at`
    (длительность разговора — совпадает с длиной записи), `direction = 0`
    (входящий), `source_phone = CallerIDNum`,
    `receiver_phone` = внутренний номер ответившего оператора (тот же, что ушёл в
@@ -363,7 +366,7 @@ Asterisk. Параметр жёстко переопределяет номер 
 | Параметр | Тип | Что отправляем | Откуда |
 |---|---|---|---|
 | `call_id` | string, обязательный | `Uniqueid` звонка | AMI |
-| `started_at` | datetime, обязательный | `AnswerTime`, запасной — `StartTime` | `Cdr`, в `okdesk.timezone`, формат `YYYY-MM-DD HH:MM` |
+| `started_at` | datetime, обязательный | время ответа оператора (AMI `AgentConnect`); запасные — `Cdr.AnswerTime`, затем `StartTime` | корреляция (БД) / `Cdr`, в `okdesk.timezone`, формат `YYYY-MM-DD HH:MM` |
 | `finished_at` | datetime, обязательный | `EndTime` | `Cdr`, та же зона и формат |
 | `duration` | int, обязательный | `finished_at − started_at`, сек | вычисляется (совпадает с длиной записи) |
 | `direction` | int, обязательный | `0` — входящий | константа (исходящие не обрабатываем) |

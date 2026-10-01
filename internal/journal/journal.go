@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"math"
 	"strconv"
 	"strings"
 	"sync"
@@ -286,7 +287,8 @@ func (j *Finalizer) finalize(ctx context.Context, uniqueid string, cdr ami.Frame
 	} else {
 		j.callsLogged.Add(1)
 		j.log.Info("звонок зажурналирован",
-			"uniqueid", uniqueid, "duration", duration, "issue_id", issueID, "file_url", fileURL)
+			"uniqueid", uniqueid, "started_at", startedAt, "finished_at", finishedAt,
+			"duration", duration, "issue_id", issueID, "file_url", fileURL)
 	}
 
 	// Звонок завершён: корреляция и дедупликация больше не нужны.
@@ -347,15 +349,17 @@ func (j *Finalizer) timing(call store.Call, cdr ami.Frame) (startedAt, finishedA
 			cdrEnd = t
 		}
 	}
-	// Начало разговора — время ответа оператора: запись ведётся от ответа до
-	// отбоя, без ожидания в очереди и музыки.
-	startedAt = cdrAnswer
-	if startedAt.IsZero() {
-		if call.AnsweredAt != nil {
-			startedAt = *call.AnsweredAt
-		} else {
-			startedAt = cdrStart
-		}
+	// Начало разговора — время ответа оператора (AMI AgentConnect). В очереди
+	// Cdr.AnswerTime фиксируется ответ вызывающему каналу (музыка/IVR), а не
+	// подключение оператора, поэтому приоритет у call.AnsweredAt. Запись ведётся
+	// от ответа оператора до отбоя, без ожидания в очереди и музыки.
+	switch {
+	case call.AnsweredAt != nil:
+		startedAt = *call.AnsweredAt
+	case !cdrAnswer.IsZero():
+		startedAt = cdrAnswer
+	default:
+		startedAt = cdrStart
 	}
 	if startedAt.IsZero() {
 		startedAt = call.CreatedAt
@@ -379,8 +383,9 @@ func (j *Finalizer) timing(call store.Call, cdr ami.Frame) (startedAt, finishedA
 		finishedAt = startedAt
 	}
 
-	// Длительность = разговор от ответа до отбоя: совпадает с длиной записи.
-	duration = int(finishedAt.Sub(startedAt).Seconds())
+	// Длительность = разговор от ответа оператора до отбоя: совпадает с длиной
+	// записи. Округляем до секунды: AnsweredAt хранится с долями секунды.
+	duration = int(math.Round(finishedAt.Sub(startedAt).Seconds()))
 	if duration < 0 {
 		duration = 0
 	}

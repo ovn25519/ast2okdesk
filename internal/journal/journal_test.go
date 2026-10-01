@@ -466,3 +466,92 @@ func TestAutoLinkDisabled(t *testing.T) {
 		t.Errorf("отправок = %d, ожидалась 1", cl.sendCount())
 	}
 }
+
+// TestTimingPrefersAgentConnect проверяет, что началом разговора берётся время
+// ответа оператора (AMI AgentConnect), а не CDR.AnswerTime: в очереди последний
+// фиксирует ответ вызывающему каналу (музыку/IVR), а не подключение оператора.
+// Длительность при этом округляется до секунды.
+func TestTimingPrefersAgentConnect(t *testing.T) {
+	st := newFakeStore()
+	answered := time.Date(2026, 9, 30, 9, 16, 0, 400_000_000, time.UTC) // 09:16:00.4
+	st.put(store.Call{
+		Uniqueid:    "u4",
+		CallerIDNum: "79990001122",
+		Status:      store.StatusAnswered,
+		AgentPeer:   "327",
+		CreatedAt:   t0,
+		AnsweredAt:  &answered,
+	})
+	cl := &fakeClient{}
+	fin := newFinalizer(st, cl, Config{TelephonyNumber: 327, CdrTimeout: time.Second})
+
+	if err := fin.OnHangup(context.Background(), hangupFrame("u4")); err != nil {
+		t.Fatalf("OnHangup: %v", err)
+	}
+	fin.OnCdr(context.Background(), ami.NewFrame(map[string]string{
+		"Event":      "Cdr",
+		"UniqueID":   "u4",
+		"StartTime":  "2026-09-30 09:15:00",
+		"AnswerTime": "2026-09-30 09:15:10", // ответ вызывающему каналу (музыка)
+		"EndTime":    "2026-09-30 09:17:00",
+	}))
+	fin.Wait()
+
+	pc, ok := cl.lastBuilt()
+	if !ok {
+		t.Fatal("phone_call не собран")
+	}
+	if !pc.StartedAt.Equal(answered) {
+		t.Errorf("started_at = %v, ожидалось время AgentConnect %v", pc.StartedAt, answered)
+	}
+	if !pc.FinishedAt.Equal(tEnd) {
+		t.Errorf("finished_at = %v, ожидалось %v", pc.FinishedAt, tEnd)
+	}
+	// 09:17:00.0 - 09:16:00.4 = 59.6 с → округление до 60.
+	if pc.Duration != 60 {
+		t.Errorf("duration = %d, ожидалось 60", pc.Duration)
+	}
+	// Минута имени файла по-прежнему из Cdr.StartTime.
+	wantURL := "https://rec/u4-2026-09-30-09_15-79990001122-s.mp3"
+	if pc.FileURL != wantURL {
+		t.Errorf("file_url = %q, ожидался %q", pc.FileURL, wantURL)
+	}
+}
+
+// TestTimingFallsBackToCdrAnswer проверяет, что при отсутствии времени
+// AgentConnect началом разговора становится CDR.AnswerTime.
+func TestTimingFallsBackToCdrAnswer(t *testing.T) {
+	st := newFakeStore()
+	st.put(store.Call{
+		Uniqueid:    "u5",
+		CallerIDNum: "79990001122",
+		Status:      store.StatusAnswered,
+		AgentPeer:   "327",
+		CreatedAt:   t0,
+	})
+	cl := &fakeClient{}
+	fin := newFinalizer(st, cl, Config{TelephonyNumber: 327, CdrTimeout: time.Second})
+
+	if err := fin.OnHangup(context.Background(), hangupFrame("u5")); err != nil {
+		t.Fatalf("OnHangup: %v", err)
+	}
+	fin.OnCdr(context.Background(), ami.NewFrame(map[string]string{
+		"Event":      "Cdr",
+		"UniqueID":   "u5",
+		"StartTime":  "2026-09-30 09:15:00",
+		"AnswerTime": "2026-09-30 09:16:00",
+		"EndTime":    "2026-09-30 09:17:00",
+	}))
+	fin.Wait()
+
+	pc, ok := cl.lastBuilt()
+	if !ok {
+		t.Fatal("phone_call не собран")
+	}
+	if !pc.StartedAt.Equal(tAnswer) {
+		t.Errorf("started_at = %v, ожидалось %v", pc.StartedAt, tAnswer)
+	}
+	if pc.Duration != 60 {
+		t.Errorf("duration = %d, ожидалось 60", pc.Duration)
+	}
+}
