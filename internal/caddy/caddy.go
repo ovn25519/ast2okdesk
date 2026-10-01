@@ -92,6 +92,12 @@ func (c Config) Render() string {
 	var b strings.Builder
 	b.WriteString("# Файл сгенерирован сервисом ast2okdesk, ручные правки будут перезаписаны.\n")
 	b.WriteString("# Листинг каталогов отключён: Caddy не отдаёт содержимое каталогов по умолчанию.\n")
+	// Глобальные параметры: отключаем автоматический HTTP->HTTPS-редирект, иначе
+	// Caddy пытается слушать порт 80, недоступный непривилегированному
+	// пользователю. Раздача идёт только на caddy.web_port (TLS через DNS-01).
+	b.WriteString("{\n")
+	b.WriteString("\tauto_https disable_redirects\n")
+	b.WriteString("}\n\n")
 	b.WriteString(c.SiteAddress)
 	b.WriteString(" {\n")
 	b.WriteString("\ttls {\n")

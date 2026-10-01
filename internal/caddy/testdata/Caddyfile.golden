@@ -1,5 +1,9 @@
 # Файл сгенерирован сервисом ast2okdesk, ручные правки будут перезаписаны.
 # Листинг каталогов отключён: Caddy не отдаёт содержимое каталогов по умолчанию.
+{
+	auto_https disable_redirects
+}
+
 https://calls.example.ru:8443 {
 	tls {
 		dns regru {

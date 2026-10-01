@@ -51,6 +51,14 @@ func TestRenderIncludesDNSCredentials(t *testing.T) {
 	}
 }
 
+func TestRenderDisablesAutoHTTPSRedirects(t *testing.T) {
+	got := testConfig().Render()
+
+	if !strings.Contains(got, "{\n\tauto_https disable_redirects\n}") {
+		t.Errorf("ожидалось отключение авторедиректа HTTP->HTTPS, получено:\n%s", got)
+	}
+}
+
 func TestRenderNormalizesURLPath(t *testing.T) {
 	cfg := testConfig()
 	cfg.RecordsURLPath = "records"
