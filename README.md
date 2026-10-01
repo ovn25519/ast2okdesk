@@ -150,7 +150,7 @@ api_token = "<OKDESK_API_TOKEN>"               # обязательный клю
 telephony_number = 327           # если задан — подставляется всегда (см. ниже)
 incoming_phone_number = "<...>"  # обязательно, → receiver_phone
 search_numbers_count = 10        # 1..10
-auto_link_issue = false          # false — заявку привязывает координатор вручную
+auto_link_issue = false          # false — Okdesk сам привяжет запись звонка к заявкам (см. ниже)
 timezone = "Europe/Moscow"       # пояс аккаунта Okdesk
 
 [recordings]

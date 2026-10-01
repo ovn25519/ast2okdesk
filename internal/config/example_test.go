@@ -25,6 +25,6 @@ func TestExampleConfigLoads(t *testing.T) {
 		t.Fatalf("в примере [[employees]] должен быть закомментирован (переопределения необязательны), получено %d", len(cfg.Employees))
 	}
 	if cfg.Okdesk.AutoLinkIssue {
-		t.Fatal("в примере okdesk.auto_link_issue должен быть false (привязку выполняет координатор)")
+		t.Fatal("в примере okdesk.auto_link_issue должен быть false (связь с заявками Okdesk выполняет сам)")
 	}
 }

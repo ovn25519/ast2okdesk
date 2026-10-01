@@ -69,7 +69,8 @@ type Okdesk struct {
 	// при поиске в Okdesk (1..10).
 	SearchNumbersCount int `toml:"search_numbers_count"`
 	// AutoLinkIssue — автоматически подбирать заявку для привязки записи о
-	// звонке. По умолчанию выключено: привязку выполняет координатор вручную.
+	// звонке. По умолчанию выключено: связь с заявками Okdesk устанавливает сам
+	// (в фоне, по активности в заявках клиента).
 	AutoLinkIssue bool `toml:"auto_link_issue"`
 	// Timezone — часовой пояс аккаунта Okdesk (IANA); применяется к started_at
 	// и finished_at в API.

@@ -58,7 +58,7 @@ type Config struct {
 	// FinalizeTimeout — предел на обработку одного звонка.
 	FinalizeTimeout time.Duration
 	// AutoLinkIssue — подбирать заявку для автопривязки. Если выключено,
-	// issue_id не отправляется, а привязку выполняет координатор вручную.
+	// issue_id не отправляется, а связь с заявками устанавливает сам Okdesk.
 	AutoLinkIssue bool
 }
 
@@ -109,7 +109,7 @@ func New(st Store, client CallClient, rec Recordings, cfg Config, logger *slog.L
 	if cfg.AutoLinkIssue {
 		f.log.Info("автопривязка заявок включена")
 	} else {
-		f.log.Info("автопривязка заявок выключена: привязку к заявке выполняет координатор вручную")
+		f.log.Info("автопривязка заявок выключена: связь с заявками устанавливает сам Okdesk")
 	}
 	return f
 }
