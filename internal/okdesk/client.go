@@ -31,6 +31,12 @@ const (
 // DirectionIncoming — направление «входящий» в phone_calls.
 const DirectionIncoming = 0
 
+// Observer получает результат каждого обращения к Okdesk (для счётчиков
+// мониторинга). err равен nil при успешном ответе.
+type Observer interface {
+	ObserveAPI(path string, err error)
+}
+
 // Config — параметры клиента Okdesk.
 type Config struct {
 	BaseURL            string
@@ -41,6 +47,8 @@ type Config struct {
 	Timezone   *time.Location
 	HTTPClient *http.Client
 	Logger     *slog.Logger
+	// Observer, если задан, уведомляется о каждом HTTP-запросе к Okdesk.
+	Observer Observer
 }
 
 // Client — клиент REST API Okdesk.
@@ -51,6 +59,7 @@ type Client struct {
 	tz                 *time.Location
 	http               *http.Client
 	log                *slog.Logger
+	observer           Observer
 }
 
 // New создаёт клиент и проверяет обязательные параметры.
@@ -85,6 +94,7 @@ func New(cfg Config) (*Client, error) {
 		tz:                 cfg.Timezone,
 		http:               hc,
 		log:                logger,
+		observer:           cfg.Observer,
 	}, nil
 }
 
@@ -120,6 +130,21 @@ type PhoneCall struct {
 // CreatePhoneCall создаёт запись о телефонном разговоре
 // (POST /api/v1/phone_calls). Время конвертируется в часовой пояс Okdesk.
 func (c *Client) CreatePhoneCall(ctx context.Context, call PhoneCall) error {
+	payload, err := c.BuildPhoneCall(call)
+	if err != nil {
+		return err
+	}
+	if err := c.SendPhoneCall(ctx, payload); err != nil {
+		return err
+	}
+	c.log.Info("запись о звонке создана в Okdesk", "call_id", call.CallID, "issue_id", call.IssueID)
+	return nil
+}
+
+// BuildPhoneCall собирает тело запроса phone_call (объект без внешней обёртки)
+// и сериализует его. Результат пригоден для отправки через SendPhoneCall и для
+// хранения в очереди retry.
+func (c *Client) BuildPhoneCall(call PhoneCall) ([]byte, error) {
 	payload := phoneCallRequest{
 		CallID:             call.CallID,
 		StartedAt:          c.formatAPITime(call.StartedAt),
@@ -132,12 +157,20 @@ func (c *Client) CreatePhoneCall(ctx context.Context, call PhoneCall) error {
 		FileURL:            call.FileURL,
 		IssueID:            call.IssueID,
 	}
-	if _, err := c.request(ctx, http.MethodPost, "/api/v1/phone_calls", nil,
-		map[string]any{"phone_call": payload}); err != nil {
-		return err
+	buf, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("okdesk: сериализация phone_call: %w", err)
 	}
-	c.log.Info("запись о звонке создана в Okdesk", "call_id", call.CallID, "issue_id", call.IssueID)
-	return nil
+	return buf, nil
+}
+
+// SendPhoneCall отправляет заранее собранный объект phone_call
+// (POST /api/v1/phone_calls). Используется как при первичной отправке, так и
+// воркером повторной доставки.
+func (c *Client) SendPhoneCall(ctx context.Context, payload []byte) error {
+	_, err := c.request(ctx, http.MethodPost, "/api/v1/phone_calls", nil,
+		map[string]any{"phone_call": json.RawMessage(payload)})
+	return err
 }
 
 // FindIssueID подбирает открытую заявку клиента для автопривязки.
@@ -359,7 +392,13 @@ func (c *Client) listIssues(ctx context.Context, contactID, companyID int) ([]Is
 }
 
 // request выполняет HTTP-запрос к Okdesk, добавляя api_token в query.
-func (c *Client) request(ctx context.Context, method, path string, query url.Values, body any) ([]byte, error) {
+func (c *Client) request(ctx context.Context, method, path string, query url.Values, body any) (data []byte, err error) {
+	if c.observer != nil {
+		// observer уведомляется о результате любого обращения (в т.ч. ошибках
+		// сети и разборе запроса).
+		defer func() { c.observer.ObserveAPI(path, err) }()
+	}
+
 	if query == nil {
 		query = url.Values{}
 	}
@@ -368,9 +407,9 @@ func (c *Client) request(ctx context.Context, method, path string, query url.Val
 
 	var reader io.Reader
 	if body != nil {
-		buf, err := json.Marshal(body)
-		if err != nil {
-			return nil, fmt.Errorf("okdesk: сериализация запроса %s: %w", path, err)
+		buf, merr := json.Marshal(body)
+		if merr != nil {
+			return nil, fmt.Errorf("okdesk: сериализация запроса %s: %w", path, merr)
 		}
 		reader = bytes.NewReader(buf)
 	}
@@ -392,7 +431,7 @@ func (c *Client) request(ctx context.Context, method, path string, query url.Val
 	}
 	defer resp.Body.Close()
 
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
+	data, err = io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	if err != nil {
 		return nil, fmt.Errorf("okdesk: чтение ответа %s: %w", path, err)
 	}

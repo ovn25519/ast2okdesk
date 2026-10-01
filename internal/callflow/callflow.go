@@ -1,9 +1,9 @@
 // Package callflow реализует диспетчер событий AMI и корреляцию звонка по
 // Uniqueid: постановку в очередь, screen-pop оператора, ответ и отказ абонента.
 //
-// Событие Hangup/Cdr и досылка записи о звонке в Okdesk относятся к следующему
-// этапу; здесь обрабатываются QueueCallerJoin, AgentCalled, AgentConnect и
-// QueueCallerAbandon.
+// События Hangup и Cdr делегируются финализатору (пакет journal), который
+// дожидается Cdr и журналирует разговор в Okdesk. Здесь обрабатываются
+// QueueCallerJoin, AgentCalled, AgentConnect и QueueCallerAbandon.
 package callflow
 
 import (
@@ -32,6 +32,15 @@ type ScreenPopper interface {
 	ScreenPop(ctx context.Context, phone string, telephonyNumber int) error
 }
 
+// Finalizer обрабатывает завершение звонка: ожидание Cdr и журналирование.
+// Реализуется пакетом journal.
+type Finalizer interface {
+	// OnHangup запускает ожидание Cdr для известного звонка.
+	OnHangup(ctx context.Context, f ami.Frame) error
+	// OnCdr принимает событие Cdr.
+	OnCdr(ctx context.Context, f ami.Frame)
+}
+
 // Config — параметры диспетчера.
 type Config struct {
 	// Queue — имя мониторируемой очереди.
@@ -45,11 +54,12 @@ type Config struct {
 
 // Dispatcher обрабатывает события AMI.
 type Dispatcher struct {
-	store Store
-	pop   ScreenPopper
-	cfg   Config
-	log   *slog.Logger
-	now   func() time.Time
+	store     Store
+	pop       ScreenPopper
+	finalizer Finalizer
+	cfg       Config
+	log       *slog.Logger
+	now       func() time.Time
 
 	wg sync.WaitGroup
 }
@@ -67,6 +77,9 @@ func New(st Store, pop ScreenPopper, cfg Config, logger *slog.Logger) *Dispatche
 		now:   time.Now,
 	}
 }
+
+// SetFinalizer назначает обработчик завершения звонка (Hangup/Cdr).
+func (d *Dispatcher) SetFinalizer(f Finalizer) { d.finalizer = f }
 
 // Wait ожидает завершения фоновых операций screen-pop.
 func (d *Dispatcher) Wait() { d.wg.Wait() }
@@ -102,6 +115,17 @@ func (d *Dispatcher) Handle(ctx context.Context, f ami.Frame) error {
 		return d.handleAgentConnect(ctx, f)
 	case "QueueCallerAbandon":
 		return d.handleQueueCallerAbandon(ctx, f)
+	case "Hangup":
+		if d.finalizer == nil {
+			return nil
+		}
+		return d.finalizer.OnHangup(ctx, f)
+	case "Cdr":
+		if d.finalizer == nil {
+			return nil
+		}
+		d.finalizer.OnCdr(ctx, f)
+		return nil
 	default:
 		return nil
 	}

@@ -93,6 +93,9 @@ func New(opts Options) *Client {
 // поэтому потребитель должен завершать работу при отмене контекста Run.
 func (c *Client) Events() <-chan Frame { return c.events }
 
+// Addr возвращает сетевой адрес AMI (host:port).
+func (c *Client) Addr() string { return c.opts.Address }
+
 // Stats возвращает снимок состояния клиента.
 func (c *Client) Stats() Stats {
 	s := Stats{
