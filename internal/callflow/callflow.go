@@ -1,9 +1,9 @@
 // Package callflow реализует диспетчер событий AMI и корреляцию звонка по
 // Uniqueid: постановку в очередь, screen-pop оператора, ответ и отказ абонента.
 //
-// События Hangup и Cdr делегируются финализатору (пакет journal), который
-// дожидается Cdr и журналирует разговор в Okdesk. Здесь обрабатываются
-// QueueCallerJoin, AgentCalled, AgentConnect и QueueCallerAbandon.
+// Событие Hangup делегируется финализатору (пакет journal), который
+// журналирует разговор в Okdesk. Здесь обрабатываются QueueCallerJoin,
+// AgentCalled, AgentConnect и QueueCallerAbandon; событие Cdr не требуется.
 package callflow
 
 import (
@@ -33,13 +33,11 @@ type ScreenPopper interface {
 	ScreenPop(ctx context.Context, phone string, telephonyNumber int) error
 }
 
-// Finalizer обрабатывает завершение звонка: ожидание Cdr и журналирование.
+// Finalizer обрабатывает завершение звонка (журналирование).
 // Реализуется пакетом journal.
 type Finalizer interface {
-	// OnHangup запускает ожидание Cdr для известного звонка.
+	// OnHangup журналирует завершённый звонок по Uniqueid.
 	OnHangup(ctx context.Context, f ami.Frame) error
-	// OnCdr принимает событие Cdr.
-	OnCdr(ctx context.Context, f ami.Frame)
 }
 
 // Config — параметры диспетчера.
@@ -82,7 +80,7 @@ func New(st Store, pop ScreenPopper, cfg Config, logger *slog.Logger) *Dispatche
 	}
 }
 
-// SetFinalizer назначает обработчик завершения звонка (Hangup/Cdr).
+// SetFinalizer назначает обработчик завершения звонка (Hangup).
 func (d *Dispatcher) SetFinalizer(f Finalizer) { d.finalizer = f }
 
 // Wait ожидает завершения фоновых операций screen-pop.
@@ -124,12 +122,6 @@ func (d *Dispatcher) Handle(ctx context.Context, f ami.Frame) error {
 			return nil
 		}
 		return d.finalizer.OnHangup(ctx, f)
-	case "Cdr":
-		if d.finalizer == nil {
-			return nil
-		}
-		d.finalizer.OnCdr(ctx, f)
-		return nil
 	default:
 		return nil
 	}

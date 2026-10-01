@@ -13,7 +13,6 @@ import (
 type fakeFinalizer struct {
 	mu   sync.Mutex
 	hang []string
-	cdr  []string
 	err  error
 }
 
@@ -24,19 +23,13 @@ func (f *fakeFinalizer) OnHangup(_ context.Context, fr ami.Frame) error {
 	return f.err
 }
 
-func (f *fakeFinalizer) OnCdr(_ context.Context, fr ami.Frame) {
+func (f *fakeFinalizer) snapshot() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.cdr = append(f.cdr, fr.Get("UniqueID"))
+	return append([]string(nil), f.hang...)
 }
 
-func (f *fakeFinalizer) snapshot() (hang, cdr []string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]string(nil), f.hang...), append([]string(nil), f.cdr...)
-}
-
-func TestFinalizerDelegation(t *testing.T) {
+func TestFinalizerHangupDelegation(t *testing.T) {
 	d := newDispatcher(newFakeStore(), &fakePop{}, testConfig(t, nil, 327))
 	ff := &fakeFinalizer{}
 	d.SetFinalizer(ff)
@@ -44,16 +37,14 @@ func TestFinalizerDelegation(t *testing.T) {
 	if err := d.Handle(context.Background(), ev("Hangup", "Uniqueid", "u1")); err != nil {
 		t.Fatalf("Handle(Hangup): %v", err)
 	}
+	// Событие Cdr больше не требуется и должно просто игнорироваться.
 	if err := d.Handle(context.Background(), ev("Cdr", "UniqueID", "u1")); err != nil {
 		t.Fatalf("Handle(Cdr): %v", err)
 	}
 
-	hang, cdr := ff.snapshot()
+	hang := ff.snapshot()
 	if len(hang) != 1 || hang[0] != "u1" {
 		t.Errorf("OnHangup вызван с %v, ожидалось [u1]", hang)
-	}
-	if len(cdr) != 1 || cdr[0] != "u1" {
-		t.Errorf("OnCdr вызван с %v, ожидалось [u1]", cdr)
 	}
 }
 

@@ -1,6 +1,6 @@
 // Package monitor реализует наблюдаемость сервиса: потокобезопасные счётчики
 // обращений к Okdesk и периодический дамп состояния в журнал (доступность AMI,
-// глубина очереди retry, приход событий Cdr, доступность каталога записей).
+// глубина очереди retry, доступность каталога записей).
 //
 // Выделенный HTTP-эндпоинт метрик не используется — по требованиям достаточно
 // структурированных записей в логе.
@@ -56,11 +56,6 @@ type RetrySource interface {
 	RetryDepth(ctx context.Context) (int, error)
 }
 
-// CDRSource предоставляет число принятых событий Cdr.
-type CDRSource interface {
-	CDRCount() int64
-}
-
 // Config — параметры монитора.
 type Config struct {
 	// Interval — период дампа; при <= 0 используется 1 минута.
@@ -76,16 +71,15 @@ type Monitor struct {
 	counters *Counters
 	ami      AMISource
 	retry    RetrySource
-	cdr      CDRSource
 }
 
 // New создаёт монитор. Любой из источников может быть nil — тогда
 // соответствующая группа полей опускается.
-func New(cfg Config, counters *Counters, amiSrc AMISource, retry RetrySource, cdr CDRSource, logger *slog.Logger) *Monitor {
+func New(cfg Config, counters *Counters, amiSrc AMISource, retry RetrySource, logger *slog.Logger) *Monitor {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Monitor{cfg: cfg, log: logger, counters: counters, ami: amiSrc, retry: retry, cdr: cdr}
+	return &Monitor{cfg: cfg, log: logger, counters: counters, ami: amiSrc, retry: retry}
 }
 
 // Run публикует дампы до отмены контекста.
@@ -115,9 +109,6 @@ func (m *Monitor) Report(ctx context.Context) {
 	if m.counters != nil {
 		s := m.counters.Snapshot()
 		attrs = append(attrs, "api_total", s.APITotal, "api_failed", s.APIFailed)
-	}
-	if m.cdr != nil {
-		attrs = append(attrs, "cdr_received", m.cdr.CDRCount())
 	}
 	if m.retry != nil {
 		if depth, err := m.retry.RetryDepth(ctx); err != nil {

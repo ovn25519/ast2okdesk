@@ -1,7 +1,11 @@
-// Package journal завершает обработку звонка: по событию Hangup дожидается
-// события Cdr (с таймаутом), собирает запись о разговоре, подбирает открытую
-// заявку для автопривязки и отправляет данные в Okdesk. При сбое отправки
-// запись кладётся в очередь retry SQLite.
+// Package journal завершает обработку звонка: по событию Hangup собирает запись
+// о разговоре, при необходимости подбирает открытую заявку для автопривязки и
+// отправляет данные в Okdesk. При сбое отправки запись кладётся в очередь retry
+// SQLite.
+//
+// Времена берутся из корреляции по Uniqueid, без события Cdr: начало разговора
+// — момент ответа оператора (AMI AgentConnect), окончание — отбой (Hangup).
+// Минута в имени файла записи восстанавливается из метки времени в Uniqueid.
 package journal
 
 import (
@@ -21,11 +25,8 @@ import (
 	"github.com/ovn25519/ast2okdesk/internal/store"
 )
 
-// Значения по умолчанию.
-const (
-	defaultCdrTimeout      = 10 * time.Second
-	defaultFinalizeTimeout = 30 * time.Second
-)
+// defaultFinalizeTimeout — предел на обработку одного звонка.
+const defaultFinalizeTimeout = 30 * time.Second
 
 // Store — подмножество хранилища, необходимое финализатору.
 type Store interface {
@@ -43,9 +44,11 @@ type CallClient interface {
 	FindIssueID(ctx context.Context, phone string) (int, bool, error)
 }
 
-// Recordings — реконструкция имени файла записи и разбор времени Cdr.
+// Recordings — восстановление имени файла записи и ссылки на неё.
 type Recordings interface {
-	ParseStartTime(raw string) (time.Time, error)
+	// StartFromUniqueid — время начала записи, восстановленное из Uniqueid.
+	StartFromUniqueid(uniqueid string) (time.Time, bool)
+	// URLFor — публичная ссылка на запись.
 	URLFor(uniqueid, callerID string, start time.Time) string
 }
 
@@ -56,8 +59,6 @@ type Config struct {
 	// TelephonyNumber — общий внутренний номер Okdesk (override). Вместе с
 	// Employees используется для определения receiver_phone ответившего оператора.
 	TelephonyNumber int
-	// CdrTimeout — сколько ждать событие Cdr после Hangup.
-	CdrTimeout time.Duration
 	// RetryInitialBackoff — задержка первой повторной отправки при сбое.
 	RetryInitialBackoff time.Duration
 	// FinalizeTimeout — предел на обработку одного звонка.
@@ -76,19 +77,9 @@ type Finalizer struct {
 	log    *slog.Logger
 	now    func() time.Time
 
-	mu      sync.Mutex
-	pending map[string]*pending
-
 	wg sync.WaitGroup
 
-	cdrReceived atomic.Int64
 	callsLogged atomic.Int64
-}
-
-// pending — звонок, ожидающий событие Cdr.
-type pending struct {
-	hangupAt time.Time
-	timer    *time.Timer
 }
 
 // New создаёт финализатор. client и rec обязательны.
@@ -96,20 +87,16 @@ func New(st Store, client CallClient, rec Recordings, cfg Config, logger *slog.L
 	if logger == nil {
 		logger = slog.Default()
 	}
-	if cfg.CdrTimeout <= 0 {
-		cfg.CdrTimeout = defaultCdrTimeout
-	}
 	if cfg.FinalizeTimeout <= 0 {
 		cfg.FinalizeTimeout = defaultFinalizeTimeout
 	}
 	f := &Finalizer{
-		store:   st,
-		client:  client,
-		rec:     rec,
-		cfg:     cfg,
-		log:     logger,
-		now:     time.Now,
-		pending: make(map[string]*pending),
+		store:  st,
+		client: client,
+		rec:    rec,
+		cfg:    cfg,
+		log:    logger,
+		now:    time.Now,
 	}
 	if cfg.AutoLinkIssue {
 		f.log.Info("автопривязка заявок включена")
@@ -119,14 +106,12 @@ func New(st Store, client CallClient, rec Recordings, cfg Config, logger *slog.L
 	return f
 }
 
-// CDRCount возвращает число принятых событий Cdr (для мониторинга).
-func (j *Finalizer) CDRCount() int64 { return j.cdrReceived.Load() }
-
 // CallsLogged возвращает число успешно зажурналированных звонков.
 func (j *Finalizer) CallsLogged() int64 { return j.callsLogged.Load() }
 
-// OnHangup запускает ожидание Cdr для известного звонка. Звонки, отсутствующие
-// в корреляции (например, канал оператора), игнорируются.
+// OnHangup завершает известный звонок: фиксирует время отбоя и запускает
+// журналирование. Звонки, отсутствующие в корреляции (например, канал
+// оператора с другим Uniqueid), игнорируются.
 func (j *Finalizer) OnHangup(ctx context.Context, f ami.Frame) error {
 	uniqueid := f.Get("Uniqueid")
 	if uniqueid == "" {
@@ -140,83 +125,30 @@ func (j *Finalizer) OnHangup(ctx context.Context, f ami.Frame) error {
 		return err
 	}
 
-	j.mu.Lock()
-	if _, ok := j.pending[uniqueid]; ok {
-		j.mu.Unlock()
-		return nil
-	}
-	p := &pending{hangupAt: j.now()}
-	p.timer = time.AfterFunc(j.cfg.CdrTimeout, func() { j.onTimeout(uniqueid) })
-	j.pending[uniqueid] = p
-	j.mu.Unlock()
-
-	// Предварительно отмечаем завершение; время уточним из Cdr.EndTime.
-	if err := j.store.MarkFinished(ctx, uniqueid, p.hangupAt); err != nil && !errors.Is(err, store.ErrNotFound) {
+	finishedAt := j.now()
+	if err := j.store.MarkFinished(ctx, uniqueid, finishedAt); err != nil && !errors.Is(err, store.ErrNotFound) {
 		j.log.Warn("Hangup: отметка завершения", "uniqueid", uniqueid, "error", err)
 	}
-	j.log.Info("Hangup: ожидание Cdr",
-		"uniqueid", uniqueid, "caller", call.CallerIDNum, "timeout", j.cfg.CdrTimeout)
+	j.log.Info("Hangup: журналирование звонка",
+		"uniqueid", uniqueid, "caller", call.CallerIDNum)
+	j.startFinalize(uniqueid)
 	return nil
-}
-
-// OnCdr принимает событие Cdr и завершает ожидающий звонок.
-func (j *Finalizer) OnCdr(_ context.Context, f ami.Frame) {
-	uniqueid := f.Get("UniqueID")
-	if uniqueid == "" {
-		uniqueid = f.Get("Uniqueid")
-	}
-	if uniqueid == "" {
-		return
-	}
-	j.cdrReceived.Add(1)
-
-	j.mu.Lock()
-	p, ok := j.pending[uniqueid]
-	if ok {
-		delete(j.pending, uniqueid)
-	}
-	j.mu.Unlock()
-	if !ok {
-		j.log.Debug("Cdr: нет ожидающего звонка", "uniqueid", uniqueid)
-		return
-	}
-	if p.timer != nil {
-		p.timer.Stop()
-	}
-	j.startFinalize(uniqueid, f)
-}
-
-// onTimeout срабатывает, если Cdr не пришёл за CdrTimeout: звонок журналируется
-// по данным корреляции.
-func (j *Finalizer) onTimeout(uniqueid string) {
-	j.mu.Lock()
-	_, ok := j.pending[uniqueid]
-	if ok {
-		delete(j.pending, uniqueid)
-	}
-	j.mu.Unlock()
-	if !ok {
-		return
-	}
-	j.log.Warn("Cdr не получен за отведённое время, журналируем по данным корреляции",
-		"uniqueid", uniqueid, "timeout", j.cfg.CdrTimeout)
-	j.startFinalize(uniqueid, ami.NewFrame(nil))
 }
 
 // startFinalize запускает обработку завершённого звонка в отдельной горутине,
 // чтобы не задерживать поток событий AMI сетевыми вызовами.
-func (j *Finalizer) startFinalize(uniqueid string, cdr ami.Frame) {
+func (j *Finalizer) startFinalize(uniqueid string) {
 	j.wg.Add(1)
 	go func() {
 		defer j.wg.Done()
 		ctx, cancel := context.WithTimeout(context.Background(), j.cfg.FinalizeTimeout)
 		defer cancel()
-		j.finalize(ctx, uniqueid, cdr)
+		j.finalize(ctx, uniqueid)
 	}()
 }
 
 // finalize собирает и отправляет запись о звонке.
-func (j *Finalizer) finalize(ctx context.Context, uniqueid string, cdr ami.Frame) {
+func (j *Finalizer) finalize(ctx context.Context, uniqueid string) {
 	call, err := j.store.GetCall(ctx, uniqueid)
 	if errors.Is(err, store.ErrNotFound) {
 		return
@@ -247,17 +179,16 @@ func (j *Finalizer) finalize(ctx context.Context, uniqueid string, cdr ami.Frame
 	}
 	receiver := strconv.Itoa(number)
 
-	j.log.Info("журналирование: данные Cdr", "uniqueid", uniqueid,
-		"start_time", cdr.Get("StartTime"),
-		"answer_time", cdr.Get("AnswerTime"),
-		"end_time", cdr.Get("EndTime"),
-		"duration", cdr.Get("Duration"),
-		"billable_seconds", cdr.Get("BillableSeconds"))
-
-	startedAt, finishedAt, duration, fileStart := j.timing(call, cdr)
+	startedAt, finishedAt, duration := j.timing(call)
 
 	fileURL := ""
 	if j.rec != nil {
+		// Минута в имени файла — время создания канала (epoch в Uniqueid);
+		// запасной вариант — время постановки звонка в очередь.
+		fileStart := call.CreatedAt
+		if t, ok := j.rec.StartFromUniqueid(uniqueid); ok {
+			fileStart = t
+		}
 		fileURL = j.rec.URLFor(uniqueid, call.CallerIDNum, fileStart)
 	}
 
@@ -334,76 +265,34 @@ func (j *Finalizer) cleanupCall(ctx context.Context, uniqueid string) {
 	}
 }
 
-// timing вычисляет времена и длительность разговора. При отсутствии Cdr
-// используются данные корреляции.
-func (j *Finalizer) timing(call store.Call, cdr ami.Frame) (startedAt, finishedAt time.Time, duration int, fileStart time.Time) {
-	var cdrStart, cdrAnswer, cdrEnd time.Time
-	if j.rec != nil {
-		if t, err := j.rec.ParseStartTime(cdr.Get("StartTime")); err == nil {
-			cdrStart = t
-		}
-		if t, err := j.rec.ParseStartTime(cdr.Get("AnswerTime")); err == nil {
-			cdrAnswer = t
-		}
-		if t, err := j.rec.ParseStartTime(cdr.Get("EndTime")); err == nil {
-			cdrEnd = t
-		}
-	}
-	// Начало разговора — время ответа оператора (AMI AgentConnect). В очереди
-	// Cdr.AnswerTime фиксируется ответ вызывающему каналу (музыка/IVR), а не
-	// подключение оператора, поэтому приоритет у call.AnsweredAt. Запись ведётся
-	// от ответа оператора до отбоя, без ожидания в очереди и музыки.
-	switch {
-	case call.AnsweredAt != nil:
+// timing вычисляет времена и длительность разговора по данным корреляции:
+// начало — ответ оператора (AgentConnect), окончание — отбой (Hangup).
+func (j *Finalizer) timing(call store.Call) (startedAt, finishedAt time.Time, duration int) {
+	startedAt = call.CreatedAt
+	if call.AnsweredAt != nil {
 		startedAt = *call.AnsweredAt
-	case !cdrAnswer.IsZero():
-		startedAt = cdrAnswer
-	default:
-		startedAt = cdrStart
-	}
-	if startedAt.IsZero() {
-		startedAt = call.CreatedAt
 	}
 
-	// Минута в имени файла — по времени постановки в очередь (начало Cdr).
-	fileStart = cdrStart
-	if fileStart.IsZero() {
-		fileStart = call.CreatedAt
-	}
-
-	finishedAt = cdrEnd
-	if finishedAt.IsZero() {
-		if call.FinishedAt != nil {
-			finishedAt = *call.FinishedAt
-		} else {
-			finishedAt = j.now()
-		}
+	finishedAt = j.now()
+	if call.FinishedAt != nil {
+		finishedAt = *call.FinishedAt
 	}
 	if finishedAt.Before(startedAt) {
 		finishedAt = startedAt
 	}
 
 	// Длительность = разговор от ответа оператора до отбоя: совпадает с длиной
-	// записи. Округляем до секунды: AnsweredAt хранится с долями секунды.
+	// записи. Округляем до секунды (AnsweredAt хранится с долями секунды) и
+	// держим минимум 1 с: Okdesk отвергает duration = 0.
 	duration = int(math.Round(finishedAt.Sub(startedAt).Seconds()))
-	if duration < 0 {
-		duration = 0
+	if duration < 1 {
+		duration = 1
 	}
-	return startedAt, finishedAt, duration, fileStart
+	return startedAt, finishedAt, duration
 }
 
 // Wait ожидает завершения обработки всех начатых звонков.
 func (j *Finalizer) Wait() { j.wg.Wait() }
 
-// Close останавливает ожидание Cdr и дожидается обработки начатых звонков.
-func (j *Finalizer) Close() {
-	j.mu.Lock()
-	for id, p := range j.pending {
-		if p.timer != nil {
-			p.timer.Stop()
-		}
-		delete(j.pending, id)
-	}
-	j.mu.Unlock()
-	j.wg.Wait()
-}
+// Close дожидается обработки начатых звонков.
+func (j *Finalizer) Close() { j.wg.Wait() }

@@ -223,7 +223,7 @@ func (s *Store) MarkAbandoned(ctx context.Context, uniqueid string, at time.Time
 		string(StatusAbandoned), formatTime(at), formatTime(time.Now()), uniqueid)
 }
 
-// MarkFinished фиксирует завершение звонка (Hangup/Cdr).
+// MarkFinished фиксирует завершение звонка (Hangup).
 func (s *Store) MarkFinished(ctx context.Context, uniqueid string, at time.Time) error {
 	return s.updateCall(ctx,
 		`UPDATE calls SET finished_at = ?, updated_at = ? WHERE uniqueid = ?`,

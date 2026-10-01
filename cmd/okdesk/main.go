@@ -143,7 +143,7 @@ func run() int {
 
 	mon := monitor.New(monitor.Config{
 		FilesDir: cfg.Recordings.FilesDir,
-	}, counters, amiClient, st, finalizer, logger)
+	}, counters, amiClient, st, logger)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

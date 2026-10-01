@@ -15,9 +15,9 @@ MP3-запись разговора.
   оператора берётся из имени peer, а при необходимости переопределяется в
   конфиге. Работает для стратегии `ringall` (отдельный screen-pop каждому
   оператору), есть дедупликация.
-- **Журналирование звонка.** По `Hangup` сервис дожидается события `Cdr` и
-  создаёт запись о разговоре (`POST /api/v1/phone_calls`) с временем,
-  длительностью, направлением и ссылкой на MP3.
+- **Журналирование звонка.** По `Hangup` сервис создаёт запись о разговоре
+  (`POST /api/v1/phone_calls`) с временем ответа оператора, длительностью,
+  направлением и ссылкой на MP3.
 - **Автопривязка к заявке (опционально).** Okdesk привязывает звонки к заявкам
   клиента сам — в фоне, примерно через 10 минут после создания записи. Сервис
   может дополнительно привязать звонок сразу, к самой свежей открытой заявке
@@ -32,7 +32,7 @@ MP3-запись разговора.
 
 ```
 Asterisk 16
-   │  AMI (события очереди + Cdr)               /var/calls/*.mp3
+   │  AMI (события очереди)                     /var/calls/*.mp3
    ▼                                                   │
 okdesk (Go-сервис)  ── SQLite (retry/корреляция/дедуп) |
    │  REST API                                         │
@@ -51,7 +51,7 @@ Okdesk  ◀──── issue_id / phone_call ─────────  Caddy
 cmd/okdesk/            точка входа, сборка и запуск компонентов
 internal/ami/          клиент AMI (подключение, Login, реконнект, парсер)
 internal/callflow/     диспетчер событий, screen-pop, дедупликация
-internal/journal/      финализация звонка (Hangup → Cdr → phone_calls)
+internal/journal/      финализация звонка (Hangup → phone_calls)
 internal/okdesk/       клиент REST API Okdesk (screen-pop, звонки, заявки)
 internal/recording/    реконструкция имени файла и file_url
 internal/retry/        досылка неудачных записей (backoff, ALERT)
@@ -75,28 +75,24 @@ config.example.toml    пример конфигурации
    ; /etc/asterisk/manager.conf
    [ast2okdesk]
    secret = <пароль>
-   read = agent,call,cdr
+   read = agent,call
    write =                      ; originate/command не нужны
    permit = 127.0.0.1/255.255.255.255
    ```
-2. **Менеджерский CDR** (даёт событие `Cdr`):
-   ```ini
-   ; /etc/asterisk/cdr_manager.conf
-   [general]
-   enabled = yes
-   ```
-3. **События вызова оператора** в настройках мониторируемой очереди:
+   Событие `Cdr` и модуль `cdr_manager` сервису **не нужны**: времена берутся из
+   событий очереди (`AgentConnect`, `Hangup`).
+2. **События вызова оператора** в настройках мониторируемой очереди:
    ```ini
    ; /etc/asterisk/queues.conf
    [support]
    eventwhencalled = yes
    ```
-4. **Запись разговоров.** Asterisk пишет MP3 в `recordings.files_dir`
+3. **Запись разговоров.** Asterisk пишет MP3 в `recordings.files_dir`
    (`/var/calls`) по шаблону
-   `{Uniqueid}-{YYYY-MM-DD-HH_MM}-{CallerIDNum}-s.mp3`, где минута берётся из
-   `Cdr.StartTime` в часовом поясе `asterisk.timezone`. Шаблон привязан к текущей
-   схеме именования записей на АТС: при её изменении правьте
-   `internal/recording`.
+   `{Uniqueid}-{YYYY-MM-DD-HH_MM}-{CallerIDNum}-s.mp3`. Минута берётся из метки
+   времени в самом `Uniqueid` (момент создания канала) в часовом поясе
+   `asterisk.timezone`. Шаблон привязан к текущей схеме именования записей на
+   АТС: при её изменении правьте `internal/recording`.
 
 ## Установка
 
@@ -216,8 +212,8 @@ sudo systemctl status okdesk okdesk-caddy
 
 Используются **две** зоны и они независимы:
 
-- `asterisk.timezone` — как трактовать времена из `Cdr` (StartTime/AnswerTime/
-  EndTime) и в какой зоне формируется минута в имени файла записи;
+- `asterisk.timezone` — в какой зоне формируется минута в имени файла записи
+  (метка времени в `Uniqueid`);
 - `okdesk.timezone` — в какой зоне отправлять `started_at`/`finished_at` в API.
 
 Сервис сам конвертирует время между зонами; менять шаблон имени файла не нужно.
@@ -318,15 +314,13 @@ Asterisk. Параметр жёстко переопределяет номер 
 
 ### Завершение разговора (журналирование)
 
-1. `Hangup` по известному `Uniqueid` → звонок помечается завершённым, сервис
-   ждёт `Cdr` (до 10 с).
+1. `Hangup` по известному `Uniqueid` → звонок помечается завершённым и сразу
+   журналируется; событие `Cdr` не требуется.
 2. `started_at` — начало разговора: время ответа **оператора** (событие AMI
-   `AgentConnect`, сохраняется в БД). Запасные варианты — `Cdr.AnswerTime`, затем
-   `StartTime`: в очереди `Cdr.AnswerTime` фиксирует ответ вызывающему каналу
-   (музыку/IVR), а не подключение оператора. `finished_at = EndTime`,
+   `AgentConnect`, сохраняется в БД). `finished_at` — момент отбоя (`Hangup`),
    `duration = finished_at − started_at`
-   (длительность разговора — совпадает с длиной записи), `direction = 0`
-   (входящий), `source_phone = CallerIDNum`,
+   (длительность разговора — совпадает с длиной записи; минимум 1 с),
+   `direction = 0` (входящий), `source_phone = CallerIDNum`,
    `receiver_phone` = внутренний номер ответившего оператора (тот же, что ушёл в
    screen-pop; по нему Okdesk определяет сотрудника),
    `file_url = recordings.base_url + имя файла`.
@@ -340,8 +334,8 @@ Asterisk. Параметр жёстко переопределяет номер 
    после завершения обработки звонка.
 
 Факт ответа оператора берётся из событий очереди (`AgentConnect` /
-`QueueCallerAbandon`), а не из `Cdr.Disposition` — последний возвращает
-`ANSWERED` даже для брошенного звонка.
+`QueueCallerAbandon`). Запись ведётся от ответа оператора до отбоя — ожидание в
+очереди и музыка в длительность не входят.
 
 Полная таблица параметров обоих методов — в разделе «Параметры API-методов».
 
@@ -366,14 +360,14 @@ Asterisk. Параметр жёстко переопределяет номер 
 | Параметр | Тип | Что отправляем | Откуда |
 |---|---|---|---|
 | `call_id` | string, обязательный | `Uniqueid` звонка | AMI |
-| `started_at` | datetime, обязательный | время ответа оператора (AMI `AgentConnect`); запасные — `Cdr.AnswerTime`, затем `StartTime` | корреляция (БД) / `Cdr`, в `okdesk.timezone`, формат `YYYY-MM-DD HH:MM` |
-| `finished_at` | datetime, обязательный | `EndTime` | `Cdr`, та же зона и формат |
+| `started_at` | datetime, обязательный | время ответа оператора (AMI `AgentConnect`) | событие очереди `AgentConnect` (БД), в `okdesk.timezone`, формат `YYYY-MM-DD HH:MM` |
+| `finished_at` | datetime, обязательный | момент отбоя | событие `Hangup` (БД), та же зона и формат |
 | `duration` | int, обязательный | `finished_at − started_at`, сек | вычисляется (совпадает с длиной записи) |
 | `direction` | int, обязательный | `0` — входящий | константа (исходящие не обрабатываем) |
 | `source_phone` | string, обязательный | номер клиента | `CallerIDNum` |
 | `receiver_phone` | string, обязательный | **внутренний номер ответившего оператора** | peer из `AgentConnect.DestChannel` → резолв |
 | `search_numbers_count` | integer, обязательный | 1..10 | `okdesk.search_numbers_count` |
-| `file_url` | string, опциональный | `recordings.base_url` + имя файла | `{Uniqueid}-{YYYY-MM-DD-HH_MM}-{CallerIDNum}-s.mp3`, минута из `Cdr.StartTime` в `asterisk.timezone` |
+| `file_url` | string, опциональный | `recordings.base_url` + имя файла | `{Uniqueid}-{YYYY-MM-DD-HH_MM}-{CallerIDNum}-s.mp3`, минута из метки времени в `Uniqueid` (в `asterisk.timezone`) |
 | `issue_id` | int, опциональный | только при `auto_link_issue = true` | автопривязка (см. ниже) |
 
 Ответ `201`; при некорректных данных — `422`. Okdesk требует
@@ -453,7 +447,6 @@ Asterisk. Параметр жёстко переопределяет номер 
 дамп состояния:
 
 - `api_total` / `api_failed` — вызовы Okdesk API;
-- `cdr_received` — сколько событий `Cdr` пришло;
 - `retry_depth` — глубина очереди досылки;
 - `ami_connected` / `ami_reconnects` / `ami_frames` / `ami_last_event` — состояние AMI;
 - `files_dir_ok` — доступность каталога записей (при недоступности — предупреждение).

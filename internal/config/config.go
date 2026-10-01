@@ -38,8 +38,9 @@ type Config struct {
 // ami_* внутри этой же секции (отступление от ТЗ: вместо секций [route] и
 // [ami]).
 type Asterisk struct {
-	// Timezone — часовой пояс сервера Asterisk (IANA), в котором трактуются
-	// времена из события Cdr. Обязательное поле, значение по умолчанию отсутствует.
+	// Timezone — часовой пояс сервера Asterisk (IANA), в котором формируется
+	// минута в имени файла записи (метка времени в Uniqueid). Обязательное поле,
+	// значение по умолчанию отсутствует.
 	Timezone string `toml:"timezone"`
 	// Queue — имя мониторируемой очереди (бывш. route.asterisk_queue).
 	Queue string `toml:"queue"`

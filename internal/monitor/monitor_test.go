@@ -43,13 +43,9 @@ type fakeRetry struct {
 
 func (f fakeRetry) RetryDepth(context.Context) (int, error) { return f.depth, f.err }
 
-type fakeCDR struct{ n int64 }
-
-func (f fakeCDR) CDRCount() int64 { return f.n }
-
-func newMonitor(cfg Config, counters *Counters, a AMISource, r RetrySource, c CDRSource) (*Monitor, *syncBuffer) {
+func newMonitor(cfg Config, counters *Counters, a AMISource, r RetrySource) (*Monitor, *syncBuffer) {
 	buf := &syncBuffer{}
-	m := New(cfg, counters, a, r, c, slog.New(slog.NewTextHandler(buf, nil)))
+	m := New(cfg, counters, a, r, slog.New(slog.NewTextHandler(buf, nil)))
 	return m, buf
 }
 
@@ -71,11 +67,11 @@ func TestReportAllSources(t *testing.T) {
 
 	m, buf := newMonitor(Config{FilesDir: dir}, counters,
 		fakeAMI{stats: ami.Stats{Connected: true, Reconnects: 3, FramesReceived: 42, LastEventAt: time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)}},
-		fakeRetry{depth: 5}, fakeCDR{n: 9})
+		fakeRetry{depth: 5})
 
 	m.Report(context.Background())
 	out := buf.String()
-	for _, want := range []string{"мониторинг", "api_total=2", "api_failed=1", "cdr_received=9",
+	for _, want := range []string{"мониторинг", "api_total=2", "api_failed=1",
 		"retry_depth=5", "ami_connected=true", "ami_reconnects=3", "ami_frames=42",
 		"files_dir_ok=true"} {
 		if !strings.Contains(out, want) {
@@ -85,7 +81,7 @@ func TestReportAllSources(t *testing.T) {
 }
 
 func TestReportRetryError(t *testing.T) {
-	m, buf := newMonitor(Config{}, &Counters{}, nil, fakeRetry{err: errors.New("бд")}, nil)
+	m, buf := newMonitor(Config{}, &Counters{}, nil, fakeRetry{err: errors.New("бд")})
 	m.Report(context.Background())
 	if !strings.Contains(buf.String(), "retry_depth_error=бд") {
 		t.Errorf("ошибка глубины retry не залогирована: %s", buf.String())
@@ -93,7 +89,7 @@ func TestReportRetryError(t *testing.T) {
 }
 
 func TestReportMissingFilesDir(t *testing.T) {
-	m, buf := newMonitor(Config{FilesDir: "/нет/такого/каталога"}, &Counters{}, nil, nil, nil)
+	m, buf := newMonitor(Config{FilesDir: "/нет/такого/каталога"}, &Counters{}, nil, nil)
 	m.Report(context.Background())
 	out := buf.String()
 	if !strings.Contains(out, "файл-сервер записей недоступен") || !strings.Contains(out, "files_dir_ok=false") {
@@ -102,7 +98,7 @@ func TestReportMissingFilesDir(t *testing.T) {
 }
 
 func TestRunPeriodic(t *testing.T) {
-	m, buf := newMonitor(Config{Interval: 20 * time.Millisecond}, &Counters{}, nil, nil, fakeCDR{n: 1})
+	m, buf := newMonitor(Config{Interval: 20 * time.Millisecond}, &Counters{}, nil, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)

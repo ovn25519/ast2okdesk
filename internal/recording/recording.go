@@ -1,20 +1,20 @@
 // Package recording собирает имя файла записи разговора и публичную ссылку на
-// неё. Имя реконструируется по фиксированному шаблону штатной записи Asterisk:
+// неё. Имя реконструируется по шаблону штатной записи Asterisk:
 //
 //	{Uniqueid}-{YYYY-MM-DD-HH_MM}-{CallerIDNum}-s.mp3
 //
-// Минута начала берётся из события Cdr.StartTime и трактуется в часовом поясе
-// сервера Asterisk (asterisk.timezone).
+// Минута начала берётся из метки времени в самом Uniqueid: Asterisk формирует
+// его как «{epoch}.{микросекунды}» в момент создания канала (до постановки в
+// очередь), поэтому отдельное событие Cdr не требуется. Метка трактуется в
+// часовом поясе сервера Asterisk (asterisk.timezone).
 package recording
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
-
-// cdrTimeLayout — формат времени в событии Cdr Asterisk.
-const cdrTimeLayout = "2006-01-02 15:04:05"
 
 // nameLayout — формат минуты начала в имени файла.
 const nameLayout = "2006-01-02-15_04"
@@ -38,15 +38,19 @@ func New(baseURL string, loc *time.Location) *Locator {
 	return &Locator{baseURL: base, loc: loc}
 }
 
-// ParseStartTime разбирает время начала звонка из события Cdr в часовом поясе
-// сервера Asterisk.
-func (l *Locator) ParseStartTime(raw string) (time.Time, error) {
-	raw = strings.TrimSpace(raw)
-	t, err := time.ParseInLocation(cdrTimeLayout, raw, l.loc)
-	if err != nil {
-		return time.Time{}, fmt.Errorf("некорректное время начала звонка %q: %w", raw, err)
+// StartFromUniqueid извлекает время создания канала из Uniqueid Asterisk
+// (формат «{epoch}.{микросекунды}») и переводит его в часовой пояс сервера.
+// Возвращает false, если Uniqueid не содержит корректной числовой метки.
+func (l *Locator) StartFromUniqueid(uniqueid string) (time.Time, bool) {
+	raw := strings.TrimSpace(uniqueid)
+	if i := strings.IndexByte(raw, '.'); i >= 0 {
+		raw = raw[:i]
 	}
-	return t, nil
+	sec, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || sec <= 0 {
+		return time.Time{}, false
+	}
+	return time.Unix(sec, 0).In(l.loc), true
 }
 
 // FileName формирует имя файла записи для звонка.

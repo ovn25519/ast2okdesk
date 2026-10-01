@@ -1,6 +1,7 @@
 package recording
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -91,26 +92,44 @@ func TestURLFor(t *testing.T) {
 	}
 }
 
-func TestParseStartTime(t *testing.T) {
+func TestStartFromUniqueid(t *testing.T) {
 	loc := mustLoad(t, "Asia/Yekaterinburg")
 	l := New("https://example.test/", loc)
 
-	got, err := l.ParseStartTime("2026-09-30 09:16:42")
-	if err != nil {
-		t.Fatalf("ParseStartTime: %v", err)
-	}
 	want := time.Date(2026, 9, 30, 9, 16, 42, 0, loc)
+	got, ok := l.StartFromUniqueid(fmt.Sprintf("%d.42", want.Unix()))
+	if !ok {
+		t.Fatal("StartFromUniqueid не распознал метку времени")
+	}
 	if !got.Equal(want) {
-		t.Errorf("ParseStartTime = %v, ожидалось %v", got, want)
+		t.Errorf("StartFromUniqueid = %v, ожидалось %v", got, want)
 	}
 	if _, off := got.Zone(); off != 5*3600 {
 		t.Errorf("смещение зоны = %d, ожидалось 18000", off)
 	}
 
-	for _, bad := range []string{"", "2026-09-30", "не дата", "2026/09/30 09:16:42"} {
-		if _, err := l.ParseStartTime(bad); err == nil {
-			t.Errorf("ParseStartTime(%q) не вернул ошибку", bad)
+	for _, bad := range []string{"", "u1", "abc.42", "0.0", "-5.42", ".42"} {
+		if _, ok := l.StartFromUniqueid(bad); ok {
+			t.Errorf("StartFromUniqueid(%q) не должен распознаваться", bad)
 		}
+	}
+}
+
+// TestURLForRealCall воспроизводит реальный звонок: минута имени файла берётся
+// из Uniqueid, а не из отдельного события Cdr.
+func TestURLForRealCall(t *testing.T) {
+	loc := mustLoad(t, "Asia/Yekaterinburg") // UTC+5
+	l := New("https://call.prosche.su:8443/records/", loc)
+
+	const uid = "1790870838.5482" // 2026-10-01 21:07:18 +05
+	start, ok := l.StartFromUniqueid(uid)
+	if !ok {
+		t.Fatal("StartFromUniqueid не распознал Uniqueid")
+	}
+	got := l.URLFor(uid, "+79655599888", start)
+	want := "https://call.prosche.su:8443/records/1790870838.5482-2026-10-01-21_07-+79655599888-s.mp3"
+	if got != want {
+		t.Errorf("URLFor = %q, ожидалось %q", got, want)
 	}
 }
 

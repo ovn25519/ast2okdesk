@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"sync"
@@ -151,6 +152,12 @@ func (c *fakeClient) sendCount() int {
 	return c.sent
 }
 
+func (c *fakeClient) findCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.findPhones)
+}
+
 // --- Вспомогательные -----------------------------------------------------------
 
 func newFinalizer(st Store, cl CallClient, cfg Config) *Finalizer {
@@ -159,6 +166,9 @@ func newFinalizer(st Store, cl CallClient, cfg Config) *Finalizer {
 	cfg.AutoLinkIssue = true
 	return New(st, cl, recording.New("https://rec/", time.UTC), cfg, silent())
 }
+
+// fixedNow возвращает функцию времени с фиксированным отбоем.
+func fixedNow(t time.Time) func() time.Time { return func() time.Time { return t } }
 
 func hangupFrame(uid string) ami.Frame {
 	return ami.NewFrame(map[string]string{"Event": "Hangup", "Uniqueid": uid})
@@ -179,28 +189,19 @@ var (
 	}
 )
 
-func TestOnHangupThenCdr(t *testing.T) {
+func TestHangupJournalsCall(t *testing.T) {
 	st := newFakeStore()
 	st.put(baseCall)
 	cl := &fakeClient{issueID: 42, issueOK: true}
 	fin := newFinalizer(st, cl, Config{
 		TelephonyNumber:     327,
-		CdrTimeout:          time.Second,
 		RetryInitialBackoff: time.Second,
 	})
+	fin.now = fixedNow(tEnd)
 
 	if err := fin.OnHangup(context.Background(), hangupFrame("u1")); err != nil {
 		t.Fatalf("OnHangup: %v", err)
 	}
-	fin.OnCdr(context.Background(), ami.NewFrame(map[string]string{
-		"Event":           "Cdr",
-		"UniqueID":        "u1",
-		"StartTime":       "2026-09-30 09:15:00",
-		"AnswerTime":      "2026-09-30 09:16:00",
-		"EndTime":         "2026-09-30 09:17:00",
-		"BillableSeconds": "60",
-		"Duration":        "120",
-	}))
 	fin.Wait()
 
 	pc, ok := cl.lastBuilt()
@@ -214,12 +215,13 @@ func TestOnHangupThenCdr(t *testing.T) {
 		t.Errorf("времена = %v..%v, ожидались %v..%v", pc.StartedAt, pc.FinishedAt, tAnswer, tEnd)
 	}
 	if pc.Duration != 60 {
-		t.Errorf("duration = %d, ожидалось 60 (BillableSeconds)", pc.Duration)
+		t.Errorf("duration = %d, ожидалось 60 (ответ→отбой)", pc.Duration)
 	}
 	if pc.Direction != okdesk.DirectionIncoming {
 		t.Errorf("direction = %d, ожидался 0", pc.Direction)
 	}
-	wantURL := "https://rec/u1-2026-09-30-09_15-79990001122-s.mp3"
+	// Uniqueid «u1» не содержит метки времени — минута берётся из CreatedAt (09:00).
+	wantURL := "https://rec/u1-2026-09-30-09_00-79990001122-s.mp3"
 	if pc.FileURL != wantURL {
 		t.Errorf("file_url = %q, ожидался %q", pc.FileURL, wantURL)
 	}
@@ -235,44 +237,101 @@ func TestOnHangupThenCdr(t *testing.T) {
 	if len(st.deletedDedup) != 1 || st.deletedDedup[0] != "u1" {
 		t.Errorf("дедупликация не удалена: %v", st.deletedDedup)
 	}
-	if fin.CDRCount() != 1 {
-		t.Errorf("CDRCount = %d, ожидалось 1", fin.CDRCount())
-	}
 	if fin.CallsLogged() != 1 {
 		t.Errorf("CallsLogged = %d, ожидалось 1", fin.CallsLogged())
 	}
 }
 
-func TestCdrTimeoutFallsBackToCorrelation(t *testing.T) {
+// TestTimingRoundsToSecond проверяет, что началом разговора берётся время ответа
+// оператора (AMI AgentConnect) и длительность округляется до секунды.
+func TestTimingRoundsToSecond(t *testing.T) {
 	st := newFakeStore()
-	st.put(baseCall)
-	cl := &fakeClient{}
-	fin := newFinalizer(st, cl, Config{
-		TelephonyNumber:     327,
-		CdrTimeout:          40 * time.Millisecond,
-		RetryInitialBackoff: time.Second,
+	answered := tAnswer.Add(400 * time.Millisecond) // 09:16:00.4
+	st.put(store.Call{
+		Uniqueid:    "u4",
+		CallerIDNum: "79990001122",
+		Status:      store.StatusAnswered,
+		AgentPeer:   "327",
+		CreatedAt:   t0,
+		AnsweredAt:  &answered,
 	})
+	cl := &fakeClient{}
+	fin := newFinalizer(st, cl, Config{TelephonyNumber: 327})
+	fin.now = fixedNow(tEnd)
 
-	if err := fin.OnHangup(context.Background(), hangupFrame("u1")); err != nil {
+	if err := fin.OnHangup(context.Background(), hangupFrame("u4")); err != nil {
 		t.Fatalf("OnHangup: %v", err)
 	}
-	time.Sleep(150 * time.Millisecond)
 	fin.Wait()
 
 	pc, ok := cl.lastBuilt()
 	if !ok {
-		t.Fatal("по таймауту запись не собрана")
+		t.Fatal("phone_call не собран")
 	}
-	if !pc.StartedAt.Equal(tAnswer) {
-		t.Errorf("started_at = %v, ожидалось время ответа из корреляции %v", pc.StartedAt, tAnswer)
+	if !pc.StartedAt.Equal(answered) {
+		t.Errorf("started_at = %v, ожидалось время AgentConnect %v", pc.StartedAt, answered)
 	}
-	// Минута имени файла — из времени постановки в очередь (Cdr отсутствует).
-	wantURL := "https://rec/u1-2026-09-30-09_00-79990001122-s.mp3"
+	// 09:17:00.0 - 09:16:00.4 = 59.6 с → округление до 60.
+	if pc.Duration != 60 {
+		t.Errorf("duration = %d, ожидалось 60", pc.Duration)
+	}
+}
+
+// TestFileNameFromUniqueid проверяет, что минута имени файла берётся из метки
+// времени в Uniqueid (время создания канала).
+func TestFileNameFromUniqueid(t *testing.T) {
+	st := newFakeStore()
+	uid := fmt.Sprintf("%d.5482", tStart.Unix())
+	st.put(store.Call{
+		Uniqueid:    uid,
+		CallerIDNum: "79990001122",
+		Status:      store.StatusAnswered,
+		AgentPeer:   "327",
+		CreatedAt:   t0,
+		AnsweredAt:  &tAnswer,
+	})
+	cl := &fakeClient{}
+	fin := newFinalizer(st, cl, Config{TelephonyNumber: 327})
+	fin.now = fixedNow(tEnd)
+
+	if err := fin.OnHangup(context.Background(), hangupFrame(uid)); err != nil {
+		t.Fatalf("OnHangup: %v", err)
+	}
+	fin.Wait()
+
+	pc, ok := cl.lastBuilt()
+	if !ok {
+		t.Fatal("phone_call не собран")
+	}
+	wantURL := fmt.Sprintf("https://rec/%s-2026-09-30-09_15-79990001122-s.mp3", uid)
 	if pc.FileURL != wantURL {
 		t.Errorf("file_url = %q, ожидался %q", pc.FileURL, wantURL)
 	}
-	if cl.sendCount() != 1 {
-		t.Errorf("отправок = %d, ожидалась 1", cl.sendCount())
+}
+
+// TestFinishedBeforeStartedClamped проверяет устойчивость к рассинхрону времени:
+// если отбой раньше ответа, длительность всё равно не меньше 1 (Okdesk отвергает 0).
+func TestFinishedBeforeStartedClamped(t *testing.T) {
+	st := newFakeStore()
+	st.put(baseCall)
+	cl := &fakeClient{}
+	fin := newFinalizer(st, cl, Config{TelephonyNumber: 327})
+	fin.now = fixedNow(tStart) // раньше времени ответа
+
+	if err := fin.OnHangup(context.Background(), hangupFrame("u1")); err != nil {
+		t.Fatalf("OnHangup: %v", err)
+	}
+	fin.Wait()
+
+	pc, ok := cl.lastBuilt()
+	if !ok {
+		t.Fatal("phone_call не собран")
+	}
+	if !pc.FinishedAt.Equal(tAnswer) {
+		t.Errorf("finished_at = %v, ожидалось выравнивание по started_at %v", pc.FinishedAt, tAnswer)
+	}
+	if pc.Duration != 1 {
+		t.Errorf("duration = %d, ожидалось 1", pc.Duration)
 	}
 }
 
@@ -282,17 +341,12 @@ func TestSendFailureEnqueuesRetry(t *testing.T) {
 	cl := &fakeClient{sendErr: errors.New("сеть недоступна")}
 	fin := newFinalizer(st, cl, Config{
 		TelephonyNumber:     327,
-		CdrTimeout:          time.Second,
 		RetryInitialBackoff: 5 * time.Second,
 	})
 
 	if err := fin.OnHangup(context.Background(), hangupFrame("u1")); err != nil {
 		t.Fatalf("OnHangup: %v", err)
 	}
-	fin.OnCdr(context.Background(), ami.NewFrame(map[string]string{
-		"Event": "Cdr", "UniqueID": "u1",
-		"StartTime": "2026-09-30 09:15:00", "EndTime": "2026-09-30 09:17:00", "BillableSeconds": "60",
-	}))
 	fin.Wait()
 
 	if len(st.retries) != 1 {
@@ -313,7 +367,7 @@ func TestSendFailureEnqueuesRetry(t *testing.T) {
 func TestUnknownHangupIgnored(t *testing.T) {
 	st := newFakeStore()
 	cl := &fakeClient{}
-	fin := newFinalizer(st, cl, Config{CdrTimeout: time.Second})
+	fin := newFinalizer(st, cl, Config{})
 
 	if err := fin.OnHangup(context.Background(), hangupFrame("нет")); err != nil {
 		t.Fatalf("OnHangup: %v", err)
@@ -325,34 +379,14 @@ func TestUnknownHangupIgnored(t *testing.T) {
 	}
 }
 
-func TestCdrWithoutHangupIgnored(t *testing.T) {
-	st := newFakeStore()
-	st.put(baseCall)
-	cl := &fakeClient{}
-	fin := newFinalizer(st, cl, Config{CdrTimeout: time.Second})
-
-	fin.OnCdr(context.Background(), ami.NewFrame(map[string]string{"Event": "Cdr", "UniqueID": "u1"}))
-	fin.Wait()
-
-	if _, ok := cl.lastBuilt(); ok {
-		t.Error("Cdr без предшествующего Hangup не должен журналироваться")
-	}
-	if fin.CDRCount() != 1 {
-		t.Errorf("CDRCount = %d, ожидалось 1", fin.CDRCount())
-	}
-}
-
 func TestIssueLookupErrorIgnored(t *testing.T) {
 	st := newFakeStore()
 	st.put(baseCall)
 	cl := &fakeClient{issueErr: errors.New("Okdesk недоступен")}
-	fin := newFinalizer(st, cl, Config{CdrTimeout: time.Second})
+	fin := newFinalizer(st, cl, Config{TelephonyNumber: 327})
+	fin.now = fixedNow(tEnd)
 
 	fin.OnHangup(context.Background(), hangupFrame("u1"))
-	fin.OnCdr(context.Background(), ami.NewFrame(map[string]string{
-		"Event": "Cdr", "UniqueID": "u1",
-		"StartTime": "2026-09-30 09:15:00", "EndTime": "2026-09-30 09:17:00", "BillableSeconds": "60",
-	}))
 	fin.Wait()
 
 	pc, ok := cl.lastBuilt()
@@ -378,12 +412,11 @@ func TestAbandonedCallNotJournaled(t *testing.T) {
 		CreatedAt:   t0,
 	})
 	cl := &fakeClient{}
-	fin := newFinalizer(st, cl, Config{CdrTimeout: time.Second, TelephonyNumber: 327})
+	fin := newFinalizer(st, cl, Config{TelephonyNumber: 327})
 
 	if err := fin.OnHangup(context.Background(), hangupFrame("u2")); err != nil {
 		t.Fatalf("OnHangup: %v", err)
 	}
-	fin.OnCdr(context.Background(), ami.NewFrame(map[string]string{"Event": "Cdr", "UniqueID": "u2"}))
 	fin.Wait()
 
 	if _, ok := cl.lastBuilt(); ok {
@@ -410,12 +443,11 @@ func TestAnsweredWithoutNumberSkipped(t *testing.T) {
 		AnsweredAt:  &tAnswer,
 	})
 	cl := &fakeClient{}
-	fin := newFinalizer(st, cl, Config{CdrTimeout: time.Second})
+	fin := newFinalizer(st, cl, Config{})
 
 	if err := fin.OnHangup(context.Background(), hangupFrame("u3")); err != nil {
 		t.Fatalf("OnHangup: %v", err)
 	}
-	fin.OnCdr(context.Background(), ami.NewFrame(map[string]string{"Event": "Cdr", "UniqueID": "u3"}))
 	fin.Wait()
 
 	if _, ok := cl.lastBuilt(); ok {
@@ -426,35 +458,27 @@ func TestAnsweredWithoutNumberSkipped(t *testing.T) {
 	}
 }
 
-// выполняется вовсе, а запись уходит в Okdesk без issue_id.
+// TestAutoLinkDisabled проверяет, что при выключенной автопривязке поиск заявки
+// не выполняется вовсе, а запись уходит в Okdesk без issue_id.
 func TestAutoLinkDisabled(t *testing.T) {
 	st := newFakeStore()
 	st.put(baseCall)
 	cl := &fakeClient{issueID: 42, issueOK: true}
 	fin := New(st, cl, recording.New("https://rec/", time.UTC), Config{
 		TelephonyNumber:     327,
-		CdrTimeout:          time.Second,
 		RetryInitialBackoff: time.Second,
 		AutoLinkIssue:       false,
 	}, silent())
+	fin.now = fixedNow(tEnd)
 
 	if err := fin.OnHangup(context.Background(), hangupFrame("u1")); err != nil {
 		t.Fatalf("OnHangup: %v", err)
 	}
-	fin.OnCdr(context.Background(), ami.NewFrame(map[string]string{
-		"Event": "Cdr", "UniqueID": "u1",
-		"StartTime": "2026-09-30 09:15:00", "AnswerTime": "2026-09-30 09:16:00",
-		"EndTime": "2026-09-30 09:17:00", "BillableSeconds": "60",
-	}))
 	fin.Wait()
 
-	cl.mu.Lock()
-	findCalls := len(cl.findPhones)
-	cl.mu.Unlock()
-	if findCalls != 0 {
-		t.Errorf("FindIssueID вызван %d раз, ожидалось 0", findCalls)
+	if n := cl.findCount(); n != 0 {
+		t.Errorf("FindIssueID вызван %d раз, ожидалось 0", n)
 	}
-
 	pc, ok := cl.lastBuilt()
 	if !ok {
 		t.Fatal("phone_call не собран")
@@ -464,94 +488,5 @@ func TestAutoLinkDisabled(t *testing.T) {
 	}
 	if cl.sendCount() != 1 {
 		t.Errorf("отправок = %d, ожидалась 1", cl.sendCount())
-	}
-}
-
-// TestTimingPrefersAgentConnect проверяет, что началом разговора берётся время
-// ответа оператора (AMI AgentConnect), а не CDR.AnswerTime: в очереди последний
-// фиксирует ответ вызывающему каналу (музыку/IVR), а не подключение оператора.
-// Длительность при этом округляется до секунды.
-func TestTimingPrefersAgentConnect(t *testing.T) {
-	st := newFakeStore()
-	answered := time.Date(2026, 9, 30, 9, 16, 0, 400_000_000, time.UTC) // 09:16:00.4
-	st.put(store.Call{
-		Uniqueid:    "u4",
-		CallerIDNum: "79990001122",
-		Status:      store.StatusAnswered,
-		AgentPeer:   "327",
-		CreatedAt:   t0,
-		AnsweredAt:  &answered,
-	})
-	cl := &fakeClient{}
-	fin := newFinalizer(st, cl, Config{TelephonyNumber: 327, CdrTimeout: time.Second})
-
-	if err := fin.OnHangup(context.Background(), hangupFrame("u4")); err != nil {
-		t.Fatalf("OnHangup: %v", err)
-	}
-	fin.OnCdr(context.Background(), ami.NewFrame(map[string]string{
-		"Event":      "Cdr",
-		"UniqueID":   "u4",
-		"StartTime":  "2026-09-30 09:15:00",
-		"AnswerTime": "2026-09-30 09:15:10", // ответ вызывающему каналу (музыка)
-		"EndTime":    "2026-09-30 09:17:00",
-	}))
-	fin.Wait()
-
-	pc, ok := cl.lastBuilt()
-	if !ok {
-		t.Fatal("phone_call не собран")
-	}
-	if !pc.StartedAt.Equal(answered) {
-		t.Errorf("started_at = %v, ожидалось время AgentConnect %v", pc.StartedAt, answered)
-	}
-	if !pc.FinishedAt.Equal(tEnd) {
-		t.Errorf("finished_at = %v, ожидалось %v", pc.FinishedAt, tEnd)
-	}
-	// 09:17:00.0 - 09:16:00.4 = 59.6 с → округление до 60.
-	if pc.Duration != 60 {
-		t.Errorf("duration = %d, ожидалось 60", pc.Duration)
-	}
-	// Минута имени файла по-прежнему из Cdr.StartTime.
-	wantURL := "https://rec/u4-2026-09-30-09_15-79990001122-s.mp3"
-	if pc.FileURL != wantURL {
-		t.Errorf("file_url = %q, ожидался %q", pc.FileURL, wantURL)
-	}
-}
-
-// TestTimingFallsBackToCdrAnswer проверяет, что при отсутствии времени
-// AgentConnect началом разговора становится CDR.AnswerTime.
-func TestTimingFallsBackToCdrAnswer(t *testing.T) {
-	st := newFakeStore()
-	st.put(store.Call{
-		Uniqueid:    "u5",
-		CallerIDNum: "79990001122",
-		Status:      store.StatusAnswered,
-		AgentPeer:   "327",
-		CreatedAt:   t0,
-	})
-	cl := &fakeClient{}
-	fin := newFinalizer(st, cl, Config{TelephonyNumber: 327, CdrTimeout: time.Second})
-
-	if err := fin.OnHangup(context.Background(), hangupFrame("u5")); err != nil {
-		t.Fatalf("OnHangup: %v", err)
-	}
-	fin.OnCdr(context.Background(), ami.NewFrame(map[string]string{
-		"Event":      "Cdr",
-		"UniqueID":   "u5",
-		"StartTime":  "2026-09-30 09:15:00",
-		"AnswerTime": "2026-09-30 09:16:00",
-		"EndTime":    "2026-09-30 09:17:00",
-	}))
-	fin.Wait()
-
-	pc, ok := cl.lastBuilt()
-	if !ok {
-		t.Fatal("phone_call не собран")
-	}
-	if !pc.StartedAt.Equal(tAnswer) {
-		t.Errorf("started_at = %v, ожидалось %v", pc.StartedAt, tAnswer)
-	}
-	if pc.Duration != 60 {
-		t.Errorf("duration = %d, ожидалось 60", pc.Duration)
 	}
 }
