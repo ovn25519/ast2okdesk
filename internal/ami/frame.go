@@ -26,6 +26,17 @@ func newFrame() Frame {
 	}
 }
 
+// NewFrame создаёт кадр из набора заголовков. Предназначен для построения
+// синтетических событий, в том числе в тестах.
+func NewFrame(headers map[string]string) Frame {
+	f := newFrame()
+	for k, v := range headers {
+		f.headers[k] = v
+		f.lower[strings.ToLower(k)] = v
+	}
+	return f
+}
+
 // Get возвращает значение заголовка name без учёта регистра.
 func (f Frame) Get(name string) string {
 	return f.lower[strings.ToLower(name)]
