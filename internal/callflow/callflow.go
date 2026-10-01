@@ -10,6 +10,7 @@ import (
 	"context"
 	"log/slog"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -45,10 +46,11 @@ type Finalizer interface {
 type Config struct {
 	// Queue — имя мониторируемой очереди.
 	Queue string
-	// TelephonyNumber — номер Okdesk по умолчанию (fallback для peer,
-	// отсутствующего в Employees). Может быть 0, если заданы Employees.
+	// TelephonyNumber — запасной внутренний номер Okdesk, если имя peer
+	// нечисловое и отсутствует в Employees. Может быть 0.
 	TelephonyNumber int
-	// Employees сопоставляет SIP-peer оператора внутреннему номеру Okdesk.
+	// Employees — необязательные переопределения: peer → внутренний номер
+	// Okdesk. Имеют приоритет над номером, извлечённым из имени peer.
 	Employees map[string]int
 }
 
@@ -182,9 +184,10 @@ func (d *Dispatcher) handleAgentCalled(ctx context.Context, f ami.Frame) error {
 		return nil
 	}
 
-	number, ok := d.telephonyNumber(peer)
+	number, source, ok := d.telephonyNumber(peer)
 	if !ok {
-		d.log.Warn("AgentCalled: для оператора не задан номер Okdesk",
+		d.log.Warn("AgentCalled: не удалось определить внутренний номер Okdesk, screen-pop пропущен "+
+			"(проверьте, что внутренний номер оператора в Okdesk совпадает с именем peer)",
 			"uniqueid", uniqueid, "peer", peer)
 		return nil
 	}
@@ -203,7 +206,8 @@ func (d *Dispatcher) handleAgentCalled(ctx context.Context, f ami.Frame) error {
 
 	phone := f.Get("CallerIDNum")
 	d.log.Info("screen-pop оператора",
-		"uniqueid", uniqueid, "peer", peer, "phone", phone, "telephony_number", number)
+		"uniqueid", uniqueid, "peer", peer, "phone", phone,
+		"telephony_number", number, "number_source", source)
 
 	// Screen-pop выполняется асинхронно, чтобы не блокировать обработку
 	// остальных событий AMI при недоступности Okdesk. Повторов нет — только лог.
@@ -265,21 +269,32 @@ func (d *Dispatcher) ourQueue(f ami.Frame) bool {
 	return f.Get("Queue") == d.cfg.Queue
 }
 
-// telephonyNumber возвращает внутренний номер Okdesk для оператора peer.
-func (d *Dispatcher) telephonyNumber(peer string) (int, bool) {
-	if n, ok := d.cfg.Employees[peer]; ok && n > 0 {
-		return n, true
+// telephonyNumber возвращает внутренний номер Okdesk для оператора peer, а также
+// источник, откуда он взялся: «employees», «peer» или «fallback».
+//
+// Порядок: явное переопределение в [[employees]] → цифровое имя peer (основной
+// путь: оператор сам указывает свой внутренний номер в профиле Okdesk) →
+// okdesk.telephony_number (запасной вариант для нечисловых имён peer).
+func (d *Dispatcher) telephonyNumber(peer string) (number int, source string, ok bool) {
+	if n, found := d.cfg.Employees[peer]; found && n > 0 {
+		return n, "employees", true
+	}
+	if n, err := strconv.Atoi(peer); err == nil && n > 0 {
+		return n, "peer", true
 	}
 	if d.cfg.TelephonyNumber > 0 {
-		return d.cfg.TelephonyNumber, true
+		return d.cfg.TelephonyNumber, "fallback", true
 	}
-	return 0, false
+	return 0, "", false
 }
 
-// destChannelRe извлекает имя SIP-peer из канала, например «SIP/101-0000000a».
-var destChannelRe = regexp.MustCompile(`^SIP/([A-Za-z0-9_]+)-`)
+// destChannelRe извлекает имя SIP/PJSIP-peer из канала, например «SIP/101-0000000a»
+// или «PJSIP/101-0000000a». Жадный класс символов с откатом делит имя peer и
+// уникальный суффикс канала по последнему дефису, поэтому имена peer могут
+// содержать «.», «_» и «-».
+var destChannelRe = regexp.MustCompile(`^(?:SIP|PJSIP)/([A-Za-z0-9_.-]+)-`)
 
-// ParsePeer извлекает оператора из значения DestChannel.
+// ParsePeer извлекает оператора из значения DestChannel (каналы SIP и PJSIP).
 func ParsePeer(destChannel string) (string, bool) {
 	m := destChannelRe.FindStringSubmatch(strings.TrimSpace(destChannel))
 	if m == nil {

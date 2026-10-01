@@ -247,7 +247,6 @@ func TestValidateErrors(t *testing.T) {
 		{"пустой okdesk.base_url", func(c *Config) { c.Okdesk.BaseURL = "" }, "okdesk.base_url"},
 		{"base_url не URL", func(c *Config) { c.Okdesk.BaseURL = "intellektstroy.okdesk.ru" }, "okdesk.base_url"},
 		{"пустой api_token", func(c *Config) { c.Okdesk.APIToken = "" }, "okdesk.api_token"},
-		{"нет telephony_number и employees", func(c *Config) { c.Okdesk.TelephonyNumber = 0 }, "okdesk.telephony_number"},
 		{"пустой incoming_phone_number", func(c *Config) { c.Okdesk.IncomingPhoneNumber = "" }, "okdesk.incoming_phone_number"},
 		{"search_numbers_count=0", func(c *Config) { c.Okdesk.SearchNumbersCount = 0 }, "okdesk.search_numbers_count"},
 		{"search_numbers_count=11", func(c *Config) { c.Okdesk.SearchNumbersCount = 11 }, "okdesk.search_numbers_count"},
@@ -297,6 +296,18 @@ func TestValidateEmployeesWithoutTelephonyNumber(t *testing.T) {
 	cfg.Employees = []Employee{{SIPPeer: "ujin327", OkdeskTelephonyNumber: 327}}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("при заполненном [[employees]] telephony_number необязателен: %v", err)
+	}
+}
+
+// TestValidateWithoutTelephonyNumbers проверяет, что конфигурация без
+// telephony_number и без [[employees]] валидна: в типовом случае номер оператора
+// берётся из имени peer.
+func TestValidateWithoutTelephonyNumbers(t *testing.T) {
+	cfg := validConfig()
+	cfg.Okdesk.TelephonyNumber = 0
+	cfg.Employees = nil
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("конфигурация без номеров должна быть валидной: %v", err)
 	}
 }
 

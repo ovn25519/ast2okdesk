@@ -271,7 +271,7 @@ func TestAgentCalledFallbackNumber(t *testing.T) {
 
 	if err := d.Handle(context.Background(), ev("AgentCalled",
 		"Queue", "support", "Uniqueid", "u1",
-		"DestChannel", "SIP/999-0000000a", "CallerIDNum", "79990001122")); err != nil {
+		"DestChannel", "SIP/ivan-0000000a", "CallerIDNum", "79990001122")); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
 	d.Wait()
@@ -289,7 +289,7 @@ func TestAgentCalledNoNumberSkips(t *testing.T) {
 
 	if err := d.Handle(context.Background(), ev("AgentCalled",
 		"Queue", "support", "Uniqueid", "u1",
-		"DestChannel", "SIP/999-0000000a", "CallerIDNum", "79990001122")); err != nil {
+		"DestChannel", "SIP/ivan-0000000a", "CallerIDNum", "79990001122")); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
 	d.Wait()
@@ -304,7 +304,7 @@ func TestAgentCalledNonSIPChannelSkips(t *testing.T) {
 	pop := &fakePop{}
 	d := newDispatcher(st, pop, testConfig(t, map[string]int{"101": 327}, 0))
 
-	for _, ch := range []string{"PJSIP/101-0000000a", "Local/101@from-queue", "", "SIP/101"} {
+	for _, ch := range []string{"Local/101@from-queue-0000;1", "", "SIP/101"} {
 		if err := d.Handle(context.Background(), ev("AgentCalled",
 			"Queue", "support", "Uniqueid", "u1", "DestChannel", ch, "CallerIDNum", "79990001122")); err != nil {
 			t.Fatalf("Handle(%q): %v", ch, err)
@@ -314,6 +314,62 @@ func TestAgentCalledNonSIPChannelSkips(t *testing.T) {
 
 	if got := pop.snapshot(); len(got) != 0 {
 		t.Errorf("screen-pop не должен вызываться для %v", got)
+	}
+}
+
+func TestAgentCalledPeerNumber(t *testing.T) {
+	st := newFakeStore()
+	pop := &fakePop{}
+	// Ни таблицы [[employees]], ни запасного номера: номер берётся из имени peer.
+	d := newDispatcher(st, pop, testConfig(t, nil, 0))
+
+	if err := d.Handle(context.Background(), ev("AgentCalled",
+		"Queue", "support", "Uniqueid", "u1",
+		"DestChannel", "SIP/327-0000000a", "CallerIDNum", "79990001122")); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	d.Wait()
+
+	got := pop.snapshot()
+	if len(got) != 1 || got[0].number != 327 {
+		t.Errorf("screen-pop = %+v, ожидался номер 327 из имени peer", got)
+	}
+}
+
+func TestAgentCalledPJSIP(t *testing.T) {
+	st := newFakeStore()
+	pop := &fakePop{}
+	d := newDispatcher(st, pop, testConfig(t, nil, 0))
+
+	if err := d.Handle(context.Background(), ev("AgentCalled",
+		"Queue", "support", "Uniqueid", "u1",
+		"DestChannel", "PJSIP/327-0000000a", "CallerIDNum", "79990001122")); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	d.Wait()
+
+	got := pop.snapshot()
+	if len(got) != 1 || got[0].number != 327 {
+		t.Errorf("screen-pop = %+v, ожидался номер 327 для канала PJSIP", got)
+	}
+}
+
+func TestAgentCalledEmployeesOverridePeer(t *testing.T) {
+	st := newFakeStore()
+	pop := &fakePop{}
+	// Явное переопределение имеет приоритет над цифровым именем peer.
+	d := newDispatcher(st, pop, testConfig(t, map[string]int{"327": 456}, 0))
+
+	if err := d.Handle(context.Background(), ev("AgentCalled",
+		"Queue", "support", "Uniqueid", "u1",
+		"DestChannel", "SIP/327-0000000a", "CallerIDNum", "79990001122")); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	d.Wait()
+
+	got := pop.snapshot()
+	if len(got) != 1 || got[0].number != 456 {
+		t.Errorf("screen-pop = %+v, ожидался номер 456 из [[employees]]", got)
 	}
 }
 
@@ -398,8 +454,10 @@ func TestParsePeer(t *testing.T) {
 	}{
 		{"SIP/101-0000000a", "101", true},
 		{"SIP/ivan_1-0000000a", "ivan_1", true},
+		{"PJSIP/101-0000000a", "101", true},
+		{"PJSIP/ivan.petrov-0000000a", "ivan.petrov", true},
+		{"SIP/sip-327-0000001a", "sip-327", true},
 		{"SIP/101", "", false},
-		{"PJSIP/101-0000000a", "", false},
 		{"Local/101@from-queue-0000;1", "", false},
 		{"", "", false},
 	}

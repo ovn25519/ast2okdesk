@@ -21,8 +21,8 @@ func TestExampleConfigLoads(t *testing.T) {
 	if cfg.Okdesk.BaseURL == "" {
 		t.Fatal("в примере не заполнен okdesk.base_url")
 	}
-	if len(cfg.Employees) == 0 {
-		t.Fatal("в примере не заполнен список [[employees]]")
+	if len(cfg.Employees) != 0 {
+		t.Fatalf("в примере [[employees]] должен быть закомментирован (переопределения необязательны), получено %d", len(cfg.Employees))
 	}
 	if cfg.Okdesk.AutoLinkIssue {
 		t.Fatal("в примере okdesk.auto_link_issue должен быть false (привязку выполняет координатор)")

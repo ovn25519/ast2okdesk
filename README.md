@@ -9,7 +9,9 @@ MP3-запись разговора.
 
 - **Screen-pop.** По событию `AgentCalled` оператору отправляется информация о
   входящем звонке (`POST /api/v1/telephony/messages`) — карточка клиента
-  открывается в Okdesk автоматически. Работает для стратегии `ringall`
+  открывается в Okdesk автоматически. Поддерживаются каналы `SIP` и `PJSIP`;
+  внутренний номер оператора берётся из имени peer, поэтому в типовом случае
+  дополнительная настройка не нужна. Работает для стратегии `ringall`
   (отдельный screen-pop каждому оператору), есть дедупликация.
 - **Журналирование звонка.** По `Hangup` сервис дожидается события `Cdr` и
   создаёт запись о разговоре (`POST /api/v1/phone_calls`) с временем,
@@ -142,9 +144,10 @@ ami_password = "<AMI_PASSWORD>"   # обязательно, только в conf
 [okdesk]
 base_url = "https://intellektstroy.okdesk.ru"  # обязательно
 api_token = "<OKDESK_API_TOKEN>"               # обязательный ключ «Администратор»
-telephony_number = 327           # fallback, если peer нет в [[employees]]
+telephony_number = 327           # запасной номер, если имя peer нечисловое
 incoming_phone_number = "<...>"  # обязательно, → receiver_phone
 search_numbers_count = 10        # 1..10
+auto_link_issue = false          # false — заявку привязывает координатор вручную
 timezone = "Europe/Moscow"       # пояс аккаунта Okdesk
 
 [recordings]
@@ -166,9 +169,11 @@ max_backoff_seconds = 3600
 correlation_ttl_hours = 24
 cleanup_interval_minutes = 10
 
-[[employees]]
-sip_peer = "327"
-okdesk_telephony_number = 327
+# Операторы: переопределения нужны только если имя peer не совпадает с
+# внутренним номером сотрудника в Okdesk. В типовом случае настраивать нечего.
+# [[employees]]
+# sip_peer = "ivan"
+# okdesk_telephony_number = 327
 ```
 
 ### Учётные данные DNS (caddy.env)
@@ -205,11 +210,14 @@ sudo systemctl status okdesk okdesk-caddy
 
 1. `QueueCallerJoin` для нашей очереди → корреляция в SQLite
    (`CallerIDNum`, `Uniqueid`, `Linkedid`).
-2. `AgentCalled` → из `DestChannel` извлекается peer оператора
-   (`SIP/([A-Za-z0-9_]+)-`), определяется внутренний номер Okdesk
-   (`[[employees]]` → иначе `okdesk.telephony_number`), выполняется дедупликация
-   по паре `Uniqueid`+`peer` и отправляется screen-pop. Ошибка screen-pop только
-   логируется — повторов нет (по ТЗ).
+2. `AgentCalled` → из `DestChannel` извлекается peer оператора (каналы `SIP/` и
+   `PJSIP/`). Внутренний номер Okdesk определяется так: явное переопределение в
+   `[[employees]]` → **если имя peer состоит из цифр, берётся оно само** (типовой
+   случай: оператор указал свой внутренний номер в профиле Okdesk) → иначе
+   `okdesk.telephony_number`. Затем дедупликация по паре `Uniqueid`+`peer` и
+   отправка screen-pop; ошибка screen-pop только логируется — повторов нет (по
+   ТЗ). Если номер определить не удалось, screen-pop пропускается с
+   предупреждением в логе.
 
 ### Завершение разговора (журналирование)
 
@@ -314,6 +322,11 @@ make build         # CGO_ENABLED=0, статический бинарник
    (вместо секций `[route]` и `[ami]`).
 2. Добавлен параметр `caddy.allowed_ips` — allowlist доступа к записям.
 3. Обрабатываются только **входящие** звонки очереди; исходящие не журналируются.
+4. Внутренний номер оператора для screen-pop берётся из имени peer (`SIP`/`PJSIP`)
+   напрямую; `okdesk.telephony_number` и `[[employees]]` — необязательные
+   переопределения (в ТЗ номер выбирался сопоставлением по таблице).
+5. Автопривязка заявки сделана отключаемой (`okdesk.auto_link_issue`, по
+   умолчанию выключена); в ТЗ звонок привязывался к заявке всегда.
 
 ## Лицензия
 

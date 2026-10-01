@@ -58,8 +58,8 @@ type Okdesk struct {
 	// BaseURL — базовый URL аккаунта, например https://intellektstroy.okdesk.ru
 	BaseURL  string `toml:"base_url"`
 	APIToken string `toml:"api_token"`
-	// TelephonyNumber — внутренний номер УЗ оператора (fallback, если peer
-	// отсутствует в списке [[employees]]).
+	// TelephonyNumber — запасной внутренний номер Okdesk, если имя peer
+	// нечисловое и отсутствует в списке [[employees]]. Необязателен.
 	TelephonyNumber int `toml:"telephony_number"`
 	// IncomingPhoneNumber — входящий номер линии, попадает в receiver_phone.
 	IncomingPhoneNumber string `toml:"incoming_phone_number"`
@@ -107,7 +107,9 @@ type Retention struct {
 	CleanupIntervalMinutes int `toml:"cleanup_interval_minutes"`
 }
 
-// Employee — сопоставление SIP-peer оператора и внутреннего номера Okdesk.
+// Employee — необязательное переопределение: SIP/PJSIP-peer оператора и
+// внутренний номер Okdesk. Нужно только если имя peer не совпадает с номером
+// сотрудника в Okdesk.
 type Employee struct {
 	SIPPeer               string `toml:"sip_peer"`
 	OkdeskTelephonyNumber int    `toml:"okdesk_telephony_number"`
@@ -216,9 +218,8 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.Okdesk.APIToken) == "" {
 		add("okdesk.api_token: обязательное поле не заполнено")
 	}
-	if c.Okdesk.TelephonyNumber <= 0 && len(c.Employees) == 0 {
-		add("okdesk.telephony_number: должен быть > 0, если не задан список [[employees]]")
-	}
+	// TelephonyNumber необязателен: в типовом случае внутренний номер
+	// оператора совпадает с именем peer и берётся из самого события AMI.
 	if strings.TrimSpace(c.Okdesk.IncomingPhoneNumber) == "" {
 		add("okdesk.incoming_phone_number: обязательное поле не заполнено")
 	}
