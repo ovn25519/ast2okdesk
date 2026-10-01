@@ -7,9 +7,9 @@
 #
 # ВАЖНО (отступление от первоначального ТЗ):
 #   параметры Asterisk объединены в секцию [asterisk], а подключение к AMI —
-#   во вложенную секцию [asterisk.ami] (ранее планировались [route] и [ami]).
-#   Дополнительно добавлен параметр caddy.allowed_ips (allowlist доступа к
-#   записям разговоров).
+#   в плоские ключи ami_* внутри неё (ранее планировались секции [route] и
+#   [ami]). Дополнительно добавлен параметр caddy.allowed_ips (allowlist
+#   доступа к записям разговоров).
 #
 # Значения ниже соответствуют значениям по умолчанию, кроме обязательных
 # плейсхолдеров, которые нужно заменить на реальные (отмечены <...>).
@@ -28,13 +28,12 @@ timezone = "Asia/Yekaterinburg"
 # звонки этой очереди.
 queue = "support"
 
-# Подключение к Asterisk Manager Interface (только чтение).
-[asterisk.ami]
-host = "localhost"
-port = 5038
-user = "ast2okdesk"
+# Подключение к Asterisk Manager Interface (только чтение). Плоские ключи ami_*.
+ami_host = "localhost"
+ami_port = 5038
+ami_user = "ast2okdesk"
 # Пароль AMI. Храните только в config.toml (права 0600); не коммитьте в git.
-password = "<AMI_PASSWORD>"
+ami_password = "<AMI_PASSWORD>"
 
 # -----------------------------------------------------------------------------
 # Okdesk: REST API и параметры телефонии

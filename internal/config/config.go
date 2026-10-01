@@ -33,21 +33,24 @@ type Config struct {
 }
 
 // Asterisk — параметры Asterisk: очередь, часовой пояс и доступ к AMI.
+//
+// Параметры подключения к Asterisk Manager Interface заданы плоскими ключами
+// ami_* внутри этой же секции (отступление от ТЗ: вместо секций [route] и
+// [ami]).
 type Asterisk struct {
 	// Timezone — часовой пояс сервера Asterisk (IANA), в котором трактуются
 	// времена из события Cdr. Обязательное поле, значение по умолчанию отсутствует.
 	Timezone string `toml:"timezone"`
 	// Queue — имя мониторируемой очереди (бывш. route.asterisk_queue).
 	Queue string `toml:"queue"`
-	AMI   AMI    `toml:"ami"`
-}
-
-// AMI — параметры read-only подключения к Asterisk Manager Interface.
-type AMI struct {
-	Host     string `toml:"host"`
-	Port     int    `toml:"port"`
-	User     string `toml:"user"`
-	Password string `toml:"password"`
+	// AMIHost — адрес сервера AMI.
+	AMIHost string `toml:"ami_host"`
+	// AMIPort — TCP-порт AMI.
+	AMIPort int `toml:"ami_port"`
+	// AMIUser — логин AMI (доступ только на чтение).
+	AMIUser string `toml:"ami_user"`
+	// AMIPassword — пароль AMI. Храните только в config.toml (0600).
+	AMIPassword string `toml:"ami_password"`
 }
 
 // Okdesk — параметры REST API Okdesk.
@@ -112,10 +115,8 @@ type Employee struct {
 func Default() Config {
 	return Config{
 		Asterisk: Asterisk{
-			AMI: AMI{
-				Host: "localhost",
-				Port: 5038,
-			},
+			AMIHost: "localhost",
+			AMIPort: 5038,
 		},
 		Okdesk: Okdesk{
 			SearchNumbersCount: 10,
@@ -192,17 +193,17 @@ func (c Config) Validate() error {
 	if !validTimezone(c.Asterisk.Timezone) {
 		add("asterisk.timezone: некорректный часовой пояс %q", c.Asterisk.Timezone)
 	}
-	if strings.TrimSpace(c.Asterisk.AMI.Host) == "" {
-		add("asterisk.ami.host: обязательное поле не заполнено")
+	if strings.TrimSpace(c.Asterisk.AMIHost) == "" {
+		add("asterisk.ami_host: обязательное поле не заполнено")
 	}
-	if c.Asterisk.AMI.Port < 1 || c.Asterisk.AMI.Port > 65535 {
-		add("asterisk.ami.port: должно быть в диапазоне 1..65535, получено %d", c.Asterisk.AMI.Port)
+	if c.Asterisk.AMIPort < 1 || c.Asterisk.AMIPort > 65535 {
+		add("asterisk.ami_port: должно быть в диапазоне 1..65535, получено %d", c.Asterisk.AMIPort)
 	}
-	if strings.TrimSpace(c.Asterisk.AMI.User) == "" {
-		add("asterisk.ami.user: обязательное поле не заполнено")
+	if strings.TrimSpace(c.Asterisk.AMIUser) == "" {
+		add("asterisk.ami_user: обязательное поле не заполнено")
 	}
-	if c.Asterisk.AMI.Password == "" {
-		add("asterisk.ami.password: обязательное поле не заполнено")
+	if c.Asterisk.AMIPassword == "" {
+		add("asterisk.ami_password: обязательное поле не заполнено")
 	}
 
 	// --- Okdesk ---
@@ -302,7 +303,7 @@ func (c Config) Validate() error {
 func (c Config) Redacted() Config {
 	r := c
 	r.Okdesk.APIToken = mask(c.Okdesk.APIToken)
-	r.Asterisk.AMI.Password = mask(c.Asterisk.AMI.Password)
+	r.Asterisk.AMIPassword = mask(c.Asterisk.AMIPassword)
 	r.Caddy.DNSCredentials = mask(c.Caddy.DNSCredentials)
 	return r
 }

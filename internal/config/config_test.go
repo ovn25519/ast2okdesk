@@ -13,12 +13,10 @@ import (
 const fullTOML = `[asterisk]
 timezone = "Asia/Yekaterinburg"
 queue = "support"
-
-[asterisk.ami]
-host = "localhost"
-port = 5038
-user = "ast2okdesk"
-password = "ami-secret"
+ami_host = "localhost"
+ami_port = 5038
+ami_user = "ast2okdesk"
+ami_password = "ami-secret"
 
 [okdesk]
 base_url = "https://intellektstroy.okdesk.ru/"
@@ -56,10 +54,8 @@ okdesk_telephony_number = 327
 const minimalTOML = `[asterisk]
 timezone = "Asia/Yekaterinburg"
 queue = "support"
-
-[asterisk.ami]
-user = "u"
-password = "p"
+ami_user = "u"
+ami_password = "p"
 
 [okdesk]
 base_url = "https://x.example"
@@ -97,8 +93,8 @@ func TestLoadFull(t *testing.T) {
 	if cfg.Asterisk.Queue != "support" {
 		t.Errorf("asterisk.queue = %q", cfg.Asterisk.Queue)
 	}
-	if cfg.Asterisk.AMI.Host != "localhost" || cfg.Asterisk.AMI.Port != 5038 {
-		t.Errorf("asterisk.ami = %+v", cfg.Asterisk.AMI)
+	if cfg.Asterisk.AMIHost != "localhost" || cfg.Asterisk.AMIPort != 5038 {
+		t.Errorf("asterisk.ami_* = %s:%d", cfg.Asterisk.AMIHost, cfg.Asterisk.AMIPort)
 	}
 	if cfg.Okdesk.APIToken != "okdesk-secret" {
 		t.Errorf("okdesk.api_token = %q", cfg.Okdesk.APIToken)
@@ -132,8 +128,8 @@ func TestLoadAppliesDefaults(t *testing.T) {
 		got  any
 		want any
 	}{
-		{"asterisk.ami.host", cfg.Asterisk.AMI.Host, "localhost"},
-		{"asterisk.ami.port", cfg.Asterisk.AMI.Port, 5038},
+		{"asterisk.ami_host", cfg.Asterisk.AMIHost, "localhost"},
+		{"asterisk.ami_port", cfg.Asterisk.AMIPort, 5038},
 		{"okdesk.search_numbers_count", cfg.Okdesk.SearchNumbersCount, 10},
 		{"okdesk.timezone", cfg.Okdesk.Timezone, "Europe/Moscow"},
 		{"recordings.files_dir", cfg.Recordings.FilesDir, "/var/calls"},
@@ -168,13 +164,52 @@ func TestLoadRejectsUnknownKeys(t *testing.T) {
 	}
 }
 
+// TestLoadRejectsLegacyNestedAMI страхует миграцию: конфигурация старого формата
+// с вложенной секцией [asterisk.ami] должна падать с перечнем неизвестных
+// ключей, а не молча игнорировать параметры подключения.
+func TestLoadRejectsLegacyNestedAMI(t *testing.T) {
+	legacy := `[asterisk]
+timezone = "Asia/Yekaterinburg"
+queue = "support"
+
+[asterisk.ami]
+host = "localhost"
+port = 5038
+user = "u"
+password = "p"
+
+[okdesk]
+base_url = "https://x.example"
+api_token = "t"
+telephony_number = 100
+incoming_phone_number = "+70000000000"
+
+[recordings]
+base_url = "https://calls.example/"
+
+[caddy]
+dns_credentials = "user:pass"
+allowed_ips = ["10.0.0.1"]
+`
+	_, err := Load(writeTemp(t, legacy))
+	if err == nil {
+		t.Fatal("ожидалась ошибка для устаревшей секции [asterisk.ami]")
+	}
+	if !strings.Contains(err.Error(), "неизвестные ключи") {
+		t.Fatalf("неожиданная ошибка: %v", err)
+	}
+	if !strings.Contains(err.Error(), "asterisk.ami") {
+		t.Fatalf("ошибка должна указывать на устаревшие ключи asterisk.ami.*: %v", err)
+	}
+}
+
 // validConfig возвращает заведомо валидную конфигурацию для табличных тестов.
 func validConfig() Config {
 	c := Default()
 	c.Asterisk.Timezone = "Asia/Yekaterinburg"
 	c.Asterisk.Queue = "support"
-	c.Asterisk.AMI.User = "ast2okdesk"
-	c.Asterisk.AMI.Password = "ami-secret"
+	c.Asterisk.AMIUser = "ast2okdesk"
+	c.Asterisk.AMIPassword = "ami-secret"
 	c.Okdesk.BaseURL = "https://intellektstroy.okdesk.ru"
 	c.Okdesk.APIToken = "okdesk-secret"
 	c.Okdesk.TelephonyNumber = 327
@@ -200,10 +235,10 @@ func TestValidateErrors(t *testing.T) {
 		{"пустая очередь", func(c *Config) { c.Asterisk.Queue = "" }, "asterisk.queue"},
 		{"пустой timezone Asterisk", func(c *Config) { c.Asterisk.Timezone = "" }, "asterisk.timezone"},
 		{"неизвестный timezone Asterisk", func(c *Config) { c.Asterisk.Timezone = "Mars/Olympus" }, "asterisk.timezone"},
-		{"пустой ami.host", func(c *Config) { c.Asterisk.AMI.Host = "" }, "asterisk.ami.host"},
-		{"ami.port вне диапазона", func(c *Config) { c.Asterisk.AMI.Port = 70000 }, "asterisk.ami.port"},
-		{"пустой ami.user", func(c *Config) { c.Asterisk.AMI.User = "" }, "asterisk.ami.user"},
-		{"пустой ami.password", func(c *Config) { c.Asterisk.AMI.Password = "" }, "asterisk.ami.password"},
+		{"пустой ami_host", func(c *Config) { c.Asterisk.AMIHost = "" }, "asterisk.ami_host"},
+		{"ami_port вне диапазона", func(c *Config) { c.Asterisk.AMIPort = 70000 }, "asterisk.ami_port"},
+		{"пустой ami_user", func(c *Config) { c.Asterisk.AMIUser = "" }, "asterisk.ami_user"},
+		{"пустой ami_password", func(c *Config) { c.Asterisk.AMIPassword = "" }, "asterisk.ami_password"},
 		{"пустой okdesk.base_url", func(c *Config) { c.Okdesk.BaseURL = "" }, "okdesk.base_url"},
 		{"base_url не URL", func(c *Config) { c.Okdesk.BaseURL = "intellektstroy.okdesk.ru" }, "okdesk.base_url"},
 		{"пустой api_token", func(c *Config) { c.Okdesk.APIToken = "" }, "okdesk.api_token"},
@@ -280,8 +315,8 @@ func TestRedacted(t *testing.T) {
 	if r.Okdesk.APIToken != maskedValue {
 		t.Errorf("api_token не замаскирован: %q", r.Okdesk.APIToken)
 	}
-	if r.Asterisk.AMI.Password != maskedValue {
-		t.Errorf("ami.password не замаскирован: %q", r.Asterisk.AMI.Password)
+	if r.Asterisk.AMIPassword != maskedValue {
+		t.Errorf("ami_password не замаскирован: %q", r.Asterisk.AMIPassword)
 	}
 	if r.Caddy.DNSCredentials != maskedValue {
 		t.Errorf("dns_credentials не замаскирован: %q", r.Caddy.DNSCredentials)

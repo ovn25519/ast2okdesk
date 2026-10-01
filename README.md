@@ -133,12 +133,10 @@ sudo install -Dm644 deploy/*.service /etc/systemd/system/
 [asterisk]
 timezone = "Asia/Yekaterinburg"   # обязательный IANA-пояс АТС
 queue = "support"                 # обязательное имя очереди
-
-[asterisk.ami]
-host = "localhost"
-port = 5038
-user = "ast2okdesk"
-password = "<AMI_PASSWORD>"       # обязательно, только в config.toml
+ami_host = "localhost"
+ami_port = 5038
+ami_user = "ast2okdesk"
+ami_password = "<AMI_PASSWORD>"   # обязательно, только в config.toml
 
 [okdesk]
 base_url = "https://intellektstroy.okdesk.ru"  # обязательно
@@ -300,8 +298,9 @@ make build         # CGO_ENABLED=0, статический бинарник
 
 ## Отступления от первоначального ТЗ
 
-1. Параметры Asterisk объединены в секцию `[asterisk]`, подключение к AMI — во
-   вложенную `[asterisk.ami]` (вместо секций `[route]` и `[ami]`).
+1. Параметры Asterisk объединены в секцию `[asterisk]`, подключение к AMI —
+   плоские ключи `ami_host`, `ami_port`, `ami_user`, `ami_password` внутри неё
+   (вместо секций `[route]` и `[ami]`).
 2. Добавлен параметр `caddy.allowed_ips` — allowlist доступа к записям.
 3. Обрабатываются только **входящие** звонки очереди; исходящие не журналируются.
 

@@ -122,9 +122,9 @@ func run() int {
 	dispatcher.SetFinalizer(finalizer)
 
 	amiClient := ami.New(ami.Options{
-		Address:  net.JoinHostPort(cfg.Asterisk.AMI.Host, strconv.Itoa(cfg.Asterisk.AMI.Port)),
-		Username: cfg.Asterisk.AMI.User,
-		Secret:   cfg.Asterisk.AMI.Password,
+		Address:  net.JoinHostPort(cfg.Asterisk.AMIHost, strconv.Itoa(cfg.Asterisk.AMIPort)),
+		Username: cfg.Asterisk.AMIUser,
+		Secret:   cfg.Asterisk.AMIPassword,
 		Logger:   logger,
 	})
 
