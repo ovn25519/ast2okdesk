@@ -1,0 +1,16 @@
+# Собранные бинарники (см. Makefile / release.yaml)
+/okdesk
+/caddy
+/dist/
+
+# Go
+*.exe
+*.test
+vendor/
+
+# Локальные артефакты и секреты — НИКОГДА не коммитить
+config.toml
+okdesk.db
+okdesk.db-wal
+okdesk.db-shm
+.env
